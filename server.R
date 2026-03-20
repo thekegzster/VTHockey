@@ -1124,9 +1124,17 @@ server <- function(input, output, session) {
     has_logo <- "opponent_logo_url" %in% names(game) &&
                 !is.na(game$opponent_logo_url) &&
                 nchar(trimws(as.character(game$opponent_logo_url))) > 0
+    initials_html <- paste0(
+      "this.outerHTML='<div style=\"width:72px;height:72px;border-radius:50%;",
+      "background:#4a4a4a;color:white;display:flex;align-items:center;",
+      "justify-content:center;font-weight:700;font-size:1.1rem;margin:auto;\">",
+      initials, "</div>'"
+    )
     opp_graphic <- if (has_logo) {
-      tags$img(src = game$opponent_logo_url, height = "72px",
-               style = "object-fit:contain; max-width:90px;")
+      tags$img(src     = game$opponent_logo_url,
+               height  = "72px",
+               style   = "object-fit:contain; max-width:90px;",
+               onerror = initials_html)
     } else {
       div(style = paste0("width:72px; height:72px; border-radius:50%;",
                          " background:#4a4a4a; color:white;",
