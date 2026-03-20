@@ -90,7 +90,7 @@ build_danger_zones <- function(res = 2) {
 # Returns one row per skater with all basic + advanced stats
 # ============================================================
 
-compute_player_stats <- function(players, shots, goals, faceoffs, hits, n_games = 1) {
+compute_player_stats <- function(players, shots, goals, faceoffs, turnovers, n_games = 1) {
 
   # guard: ensure required columns exist even on empty frames
   safe_nrow <- function(df) if (is.null(df) || nrow(df) == 0) 0L else nrow(df)
@@ -146,11 +146,17 @@ compute_player_stats <- function(players, shots, goals, faceoffs, hits, n_games 
       dplyr::rename(player_id = assist2_id)
   } else data.frame(player_id = integer(0), a2 = integer(0))
 
-  # --- physical stats ---
-  hit_stats <- if (nrow(hits) > 0) {
-    hits[hits$hit_type == "delivered" & !is.na(hits$hit_type), ] |>
-      dplyr::count(player_id, name = "hits")
-  } else data.frame(player_id = integer(0), hits = integer(0))
+  # --- turnover stats ---
+  turnover_stats <- if (nrow(turnovers) > 0 && "type" %in% names(turnovers)) {
+    turnovers |>
+      dplyr::group_by(player_id) |>
+      dplyr::summarise(
+        takeaways = sum(type == "takeaway", na.rm = TRUE),
+        giveaways = sum(type == "giveaway", na.rm = TRUE),
+        .groups   = "drop"
+      )
+  } else data.frame(player_id = integer(0), takeaways = integer(0),
+                    giveaways = integer(0))
 
   # --- faceoff stats ---
   fo_stats <- if (nrow(faceoffs) > 0) {
@@ -177,11 +183,11 @@ compute_player_stats <- function(players, shots, goals, faceoffs, hits, n_games 
     dplyr::left_join(a1,        by = "player_id") |>
     dplyr::left_join(a2,        by = "player_id") |>
     dplyr::left_join(shot_stats, by = "player_id") |>
-    dplyr::left_join(hit_stats,  by = "player_id") |>
+    dplyr::left_join(turnover_stats, by = "player_id") |>
     dplyr::left_join(fo_stats,   by = "player_id") |>
     dplyr::mutate(
       dplyr::across(c(goals, a1, a2, shots, goals_shot, on_goal,
-                      high_danger, hits, fo_total, fo_wins),
+                      high_danger, takeaways, giveaways, fo_total, fo_wins),
                     ~ tidyr::replace_na(.x, 0L)),
       dplyr::across(c(xg_total, xg_per_shot),
                     ~ tidyr::replace_na(.x, 0.0)),
@@ -193,8 +199,13 @@ compute_player_stats <- function(players, shots, goals, faceoffs, hits, n_games 
       g_minus_xg  = round(goals - xg_total, 2),   # goals above expected
       pts_per_game = round(points / max(n_games, 1), 2),
       xg_per_game  = round(xg_total / max(n_games, 1), 2),
-      shots_per_game = round(shots / max(n_games, 1), 2),
-      hits_per_game  = round(hits / max(n_games, 1), 2)
+      shots_per_game     = round(shots     / max(n_games, 1), 2),
+      takeaways_per_game = round(takeaways / max(n_games, 1), 2),
+      giveaways_per_game = round(giveaways / max(n_games, 1), 2),
+      ta_ga_ratio        = ifelse(giveaways > 0,
+                                  round(takeaways / giveaways, 2),
+                                  NA_real_),
+      net_turnovers      = takeaways - giveaways
     ) |>
     dplyr::arrange(dplyr::desc(points), dplyr::desc(goals))
 
