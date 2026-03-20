@@ -114,6 +114,27 @@ server <- function(input, output, session) {
     rv$game_label     <- names(games_list()[games_list() == input$game_select])
     rv$setup_done     <- TRUE
 
+    # --- Reset all per-game state so old data never bleeds into a new game ---
+    rv$faceoff_log      <- list()
+    rv$to_log           <- list()
+    rv$shot_log         <- list()
+    rv$goal_log         <- list()
+    rv$last_faceoff_id  <- NULL
+    rv$last_to_id       <- NULL
+    rv$last_shot_id     <- NULL
+    rv$last_goal_id     <- NULL
+    rv$current_jerseys  <- character(0)
+    rv$line_log         <- list()
+    rv$pending_shot_x   <- NULL
+    rv$pending_shot_y   <- NULL
+
+    # Clear summary tables immediately so stale data isn't shown during fetch
+    summary_data$faceoffs  <- data.frame()
+    summary_data$turnovers <- data.frame()
+    summary_data$shots     <- data.frame()
+    summary_data$goals     <- data.frame()
+    summary_data$on_ice    <- data.frame()
+
     # Load player roster from Supabase
     players <- sb_load_players()
     rv$players <- players
@@ -128,6 +149,9 @@ server <- function(input, output, session) {
     updateSelectizeInput(session, "goal_assist2",
                          choices = c("(none)" = "", players), server = TRUE)
     updateSelectizeInput(session, "on_ice_players", choices = players, server = TRUE)
+
+    # Refresh summary for the newly selected game
+    tryCatch(do_refresh_summary(silent = TRUE), error = function(e) NULL)
 
     notify_ok(paste0("Session started!  Collector: ", rv$collector_name,
                      "  |  Game: ", rv$game_label))
@@ -666,11 +690,18 @@ server <- function(input, output, session) {
 
   output$summary_goal_list <- renderUI({
     df <- summary_data$goals
-    if (nrow(df) == 0) return(p("No goals recorded yet."))
-    items <- apply(df, 1, function(row) {
-      tags$li(paste0(row["team"], " goal — P", row["period"], " ", row["game_time"]))
+    if (is.null(df) || !is.data.frame(df) || nrow(df) == 0)
+      return(p("No goals recorded yet."))
+    needed <- c("team", "period", "game_time")
+    if (!all(needed %in% names(df)))
+      return(p("No goals recorded yet."))
+    items <- lapply(seq_len(nrow(df)), function(i) {
+      row <- df[i, ]
+      scorer <- if ("scorer_name" %in% names(df) && !is.na(row$scorer_name))
+        paste0(" (", row$scorer_name, ")") else ""
+      tags$li(paste0(row$team, " goal — P", row$period, " ", row$game_time, scorer))
     })
-    tags$ul(items)
+    do.call(tags$ul, items)
   })
 
   make_dt <- function(df) {
