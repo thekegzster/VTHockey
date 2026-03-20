@@ -29,7 +29,11 @@ server <- function(input, output, session) {
     last_faceoff_id = NULL,
     last_hit_id     = NULL,
     last_shot_id    = NULL,
-    last_goal_id    = NULL
+    last_goal_id    = NULL,
+
+    # On Ice tab: current line (jersey numbers as strings) + change log
+    current_jerseys = character(0),
+    line_log        = list()
   )
 
   # ----------------------------------------------------------
@@ -165,36 +169,129 @@ server <- function(input, output, session) {
   output$session_required_goals    <- session_required_ui("goals")
 
   # ----------------------------------------------------------
-  # GOAL TAB: show scorer/assist fields only for VT goals
+  # ON ICE TAB
   # ----------------------------------------------------------
-  output$goal_vt_fields <- renderUI({
-    req(input$goal_team)
-    if (input$goal_team == "opponent") {
-      return(helpText("Recording opponent goal — no scorer details needed."))
+
+  # Helper: look up player name from jersey number string
+  jersey_to_name <- function(j) {
+    if (is.null(j) || nchar(trimws(j)) == 0 || is.null(rv$players)) return("")
+    m <- names(rv$players)[grepl(paste0("^#", trimws(j), "\\b"), names(rv$players))]
+    if (length(m) == 1) m[1] else ""
+  }
+
+  # Helper: look up player_id from jersey number string
+  jersey_to_id <- function(j) {
+    if (is.null(j) || nchar(trimws(j)) == 0 || is.null(rv$players)) return(NULL)
+    m <- rv$players[grepl(paste0("^#", trimws(j), "\\b"), names(rv$players))]
+    if (length(m) == 1) as.integer(m[1]) else NULL
+  }
+
+  # Render player name label under each jersey box
+  lapply(1:5, function(i) {
+    local({
+      li <- i
+      output[[paste0("ice_lbl_", li)]] <- renderUI({
+        val <- input[[paste0("ice_", li)]]
+        nm  <- jersey_to_name(val)
+        if (nchar(nm) == 0) {
+          div(style = "height:18px; font-size:0.75rem; color:#ccc;", "\u2013")
+        } else {
+          last <- gsub("^#\\d+\\s+", "", nm)
+          div(style = paste0("font-size:0.75rem; font-weight:700;",
+                             " color:", VT_MAROON, "; margin-top:2px;"),
+              last)
+        }
+      })
+    })
+  })
+
+  # Set Line button — store jersey numbers in rv$current_jerseys
+  observeEvent(input$btn_set_line, {
+    req(rv$setup_done)
+    jerseys <- vapply(1:5, function(i) {
+      trimws(as.character(input[[paste0("ice_", i)]] %||% ""))
+    }, character(1))
+    jerseys <- jerseys[nchar(jerseys) > 0]
+
+    if (length(jerseys) == 0) {
+      notify_err("Enter at least one jersey number."); return()
     }
-    tagList(
-      selectizeInput("goal_scorer", "Scorer",
-                     choices = if (!is.null(rv$players)) rv$players else NULL,
-                     width = "100%",
-                     options = list(placeholder = "Start typing name or #...")),
-      fluidRow(
-        column(6,
-          selectizeInput("goal_assist1", "Primary assist",
-                         choices = c("(none)" = "",
-                                     if (!is.null(rv$players)) rv$players else NULL),
-                         width = "100%",
-                         options = list(placeholder = "(none)"))
-        ),
-        column(6,
-          selectizeInput("goal_assist2", "Secondary assist",
-                         choices = c("(none)" = "",
-                                     if (!is.null(rv$players)) rv$players else NULL),
-                         width = "100%",
-                         options = list(placeholder = "(none)"))
-        )
+
+    rv$current_jerseys <- jerseys
+
+    labels <- vapply(jerseys, function(j) {
+      nm <- jersey_to_name(j)
+      if (nchar(nm) > 0) nm else paste0("#", j, " (?)")
+    }, character(1))
+
+    entry <- paste0(format(Sys.time(), "%H:%M"), "  \u2192  ",
+                    paste(labels, collapse = "  |  "))
+    rv$line_log <- c(list(entry), rv$line_log)[1:min(15, length(rv$line_log) + 1)]
+    notify_ok(paste0("Line set: ", paste0("#", jerseys, collapse = " \u2013 ")))
+  })
+
+  # Current lineup banner
+  output$on_ice_banner <- renderUI({
+    jerseys <- rv$current_jerseys
+    if (length(jerseys) == 0) {
+      return(div(class = "alert alert-warning mb-0",
+                 icon("triangle-exclamation"),
+                 " No line set yet \u2014 enter jersey numbers below and hit Set Line."))
+    }
+    circles <- lapply(jerseys, function(j) {
+      nm  <- jersey_to_name(j)
+      lbl <- if (nchar(nm) > 0) gsub("^#\\d+\\s+", "", nm) else "?"
+      div(class = "text-center",
+        div(style = paste0("width:58px; height:58px; border-radius:50%;",
+                           " background:white; color:", VT_MAROON, ";",
+                           " display:flex; align-items:center; justify-content:center;",
+                           " font-weight:800; font-size:1.25rem;",
+                           " border:2px solid rgba(255,255,255,0.4);"),
+            paste0("#", j)),
+        div(style = "font-size:0.72rem; font-weight:700; color:white; margin-top:3px;",
+            lbl)
       )
+    })
+    div(
+      style = paste0("background:", VT_MAROON, "; border-radius:10px;",
+                     " padding:16px 20px; color:white;"),
+      div(class = "d-flex justify-content-between align-items-center mb-2",
+          tags$span(style = "font-weight:700; font-size:0.85rem; letter-spacing:1px;",
+                    tagList(icon("users"), " CURRENT LINE ON ICE")),
+          tags$span(style = "font-size:0.78rem; opacity:0.8;",
+                    paste0(length(jerseys), " players"))
+      ),
+      div(class = "d-flex gap-3 justify-content-center", circles)
     )
   })
+
+  # Line change log
+  output$line_change_log <- renderUI({
+    if (length(rv$line_log) == 0)
+      return(p(class = "text-muted", "No line changes recorded yet."))
+    tags$ul(class = "list-unstyled mb-0",
+      lapply(rv$line_log, function(e) {
+        tags$li(style = "font-size:0.83rem; padding:3px 0;",
+                icon("hockey-puck"), " ", e)
+      })
+    )
+  })
+
+  # Assist fields shown in the Shots form when result == "goal" AND team == "VT"
+  output$shot_goal_assist_fields <- renderUI({
+    players_choices <- c("(none)" = "", if (!is.null(rv$players)) rv$players else NULL)
+    tagList(
+      selectizeInput("shot_goal_assist1", "Primary assist",
+                     choices = players_choices, width = "100%",
+                     options = list(placeholder = "(none)")),
+      selectizeInput("shot_goal_assist2", "Secondary assist",
+                     choices = players_choices, width = "100%",
+                     options = list(placeholder = "(none)"))
+    )
+  })
+
+  # session_required panel for on ice tab
+  output$session_required_on_ice <- session_required_ui("on_ice")
 
   # ----------------------------------------------------------
   # RINK CLICK → store pending shot location
@@ -274,6 +371,7 @@ server <- function(input, output, session) {
                       "  (", input$fo_zone, ")")
       rv$faceoff_log <- c(list(entry), rv$faceoff_log)[1:min(5, length(rv$faceoff_log) + 1)]
       notify_ok("Faceoff recorded!")
+      tryCatch(load_analytics(), error = function(e) NULL)
     } else {
       notify_err(result$error)
     }
@@ -324,6 +422,7 @@ server <- function(input, output, session) {
                       player_label, "  — ", input$hit_type)
       rv$hit_log <- c(list(entry), rv$hit_log)[1:min(5, length(rv$hit_log) + 1)]
       notify_ok("Hit recorded!")
+      tryCatch(load_analytics(), error = function(e) NULL)
     } else {
       notify_err(result$error)
     }
@@ -380,12 +479,21 @@ server <- function(input, output, session) {
     result <- sb_insert("shots", shot_data)
 
     if (result$success) {
-      rv$last_shot_id <- result$id
-      who <- if (is_vt) {
+      shot_id         <- result$id
+      rv$last_shot_id <- shot_id
+
+      # Auto-log current on-ice line for this shot
+      log_on_ice_for_shot(shot_id)
+
+      # If it's a goal — auto-create goal record
+      is_goal <- !is.null(input$shot_result) && input$shot_result == "goal"
+      if (is_goal) log_goal_from_shot(shot_id, is_vt)
+
+      # Build log entry
+      who <- if (is_vt)
         names(rv$players[rv$players == input$shot_player])
-      } else {
+      else
         "Opponent"
-      }
       loc_str <- if (!is.null(rv$pending_shot_x))
         paste0(" @ (", rv$pending_shot_x, ",", rv$pending_shot_y, ")") else ""
       entry <- paste0(input$shot_period, "P  ", input$shot_time, "  ",
@@ -393,7 +501,13 @@ server <- function(input, output, session) {
       rv$shot_log <- c(list(entry), rv$shot_log)[1:min(5, length(rv$shot_log) + 1)]
       rv$pending_shot_x <- NULL
       rv$pending_shot_y <- NULL
-      notify_ok("Shot recorded!")
+
+      if (is_goal) {
+        notify_ok(if (is_vt) "\U0001f6a8 GOAL! Hokies score!" else "Opponent goal recorded.")
+      } else {
+        notify_ok("Shot recorded!")
+      }
+      tryCatch(load_analytics(), error = function(e) NULL)
     } else {
       notify_err(result$error)
     }
@@ -417,96 +531,53 @@ server <- function(input, output, session) {
   })
 
   # ----------------------------------------------------------
-  # SUBMIT GOAL + ON-ICE PLAYERS
+  # AUTO-LOG GOAL from shot (called inside btn_submit_shot)
   # ----------------------------------------------------------
-  observeEvent(input$btn_submit_goal, {
-    req(rv$setup_done)
-
-    disable("btn_submit_goal")
-    on.exit(enable("btn_submit_goal"))
-
-    # Build goal record
+  log_goal_from_shot <- function(shot_id, is_vt) {
     goal_data <- list(
       game_id        = rv$game_id,
-      period         = input$goal_period,
-      game_time      = trimws(input$goal_time),
-      situation      = input$goal_situation,
-      empty_net      = isTRUE(input$goal_empty_net),
-      team           = input$goal_team,
+      shot_id        = shot_id,
+      period         = input$shot_period,
+      game_time      = trimws(input$shot_time),
+      situation      = input$shot_goal_situation %||% "even",
+      empty_net      = isTRUE(input$shot_goal_empty_net),
+      team           = input$shot_team,
       collector_name = rv$collector_name
     )
-
-    # Add VT-specific scorer/assist fields
-    if (input$goal_team == "VT") {
-      if (!is.null(input$goal_scorer) && input$goal_scorer != "") {
-        goal_data$scorer_id <- as.integer(input$goal_scorer)
-      }
-      if (!is.null(input$goal_assist1) && input$goal_assist1 != "") {
-        goal_data$assist1_id <- as.integer(input$goal_assist1)
-      }
-      if (!is.null(input$goal_assist2) && input$goal_assist2 != "") {
-        goal_data$assist2_id <- as.integer(input$goal_assist2)
-      }
+    if (is_vt) {
+      if (!is.null(input$shot_player) && input$shot_player != "")
+        goal_data$scorer_id <- as.integer(input$shot_player)
+      if (!is.null(input$shot_goal_assist1) && nchar(input$shot_goal_assist1) > 0)
+        goal_data$assist1_id <- as.integer(input$shot_goal_assist1)
+      if (!is.null(input$shot_goal_assist2) && nchar(input$shot_goal_assist2) > 0)
+        goal_data$assist2_id <- as.integer(input$shot_goal_assist2)
     }
+    goal_data <- Filter(Negate(is.null), goal_data)
+    gr <- sb_insert("goals", goal_data)
+    if (gr$success) rv$last_goal_id <- gr$id
+  }
 
-    goal_result <- sb_insert("goals", goal_data)
-
-    if (!goal_result$success) {
-      notify_err(goal_result$error)
-      return()
-    }
-
-    goal_id <- goal_result$id
-    rv$last_goal_id <- goal_id
-
-    # Insert one on_ice row per selected player
-    on_ice_players <- input$on_ice_players
-    if (length(on_ice_players) > 0) {
-      for (pid in on_ice_players) {
-        sb_insert("on_ice", list(
+  # ----------------------------------------------------------
+  # AUTO-LOG ON-ICE PLAYERS from current line (called per shot)
+  # ----------------------------------------------------------
+  log_on_ice_for_shot <- function(shot_id) {
+    jerseys <- rv$current_jerseys
+    if (length(jerseys) == 0) return()
+    for (j in jerseys) {
+      pid <- jersey_to_id(j)
+      if (!is.null(pid)) {
+        sb_insert("on_ice", Filter(Negate(is.null), list(
           game_id        = rv$game_id,
-          goal_id        = goal_id,
-          period         = input$goal_period,
-          game_time      = trimws(input$goal_time),
-          player_id      = as.integer(pid),
+          shot_id        = shot_id,
+          period         = input$shot_period,
+          game_time      = trimws(input$shot_time),
+          player_id      = pid,
           team           = "VT",
           collector_name = rv$collector_name
-        ))
+        )))
       }
     }
-
-    # Build log entry
-    if (input$goal_team == "VT" &&
-        !is.null(input$goal_scorer) && input$goal_scorer != "") {
-      scorer_label <- names(rv$players[rv$players == input$goal_scorer])
-      entry <- paste0(input$goal_period, "P  ", input$goal_time,
-                      "  GOAL — ", scorer_label,
-                      "  [", length(on_ice_players), " on ice]")
-    } else {
-      entry <- paste0(input$goal_period, "P  ", input$goal_time,
-                      "  OPPONENT GOAL")
-    }
-    rv$goal_log <- c(list(entry), rv$goal_log)[1:min(5, length(rv$goal_log) + 1)]
-
-    notify_ok(if (input$goal_team == "VT") "GOAL! Hokies score!" else "Opponent goal recorded.")
-  })
-
-  observeEvent(input$btn_undo_goal, {
-    req(!is.null(rv$last_goal_id))
-    res <- sb_delete("goals", rv$last_goal_id)
-    if (res$success) {
-      rv$last_goal_id <- NULL
-      rv$goal_log <- rv$goal_log[-1]
-      notify_ok("Last goal entry deleted.")
-    } else {
-      notify_err("Could not undo — record may be too old.")
-    }
-  })
-
-  output$goal_log <- renderUI({
-    if (length(rv$goal_log) == 0) return(p("No entries yet."))
-    tags$ol(lapply(rv$goal_log, tags$li))
-  })
+  }
 
   # ----------------------------------------------------------
   # SUMMARY TAB
@@ -610,43 +681,77 @@ server <- function(input, output, session) {
   output$table_on_ice   <- renderDT({ make_dt(summary_data$on_ice) })
 
   # ============================================================
+  # SEASON ANALYTICS CACHE
+  # Fetched once on load, then refreshed after every submission.
+  # All player/team outputs read from this cache — zero extra HTTP calls.
+  # ============================================================
+
+  analytics_data <- reactiveVal(list(
+    players  = data.frame(),
+    shots    = data.frame(),
+    goals    = data.frame(),
+    faceoffs = data.frame(),
+    hits     = data.frame(),
+    games    = data.frame(),
+    n_games  = 1L
+  ))
+
+  load_analytics <- function() {
+    tryCatch({
+      players  <- sb_select("players",
+                           select  = "id,jersey_num,full_name,position,active",
+                           filters = c("active" = "eq.true"),
+                           order   = "jersey_num.asc")
+      shots    <- sb_select("shots")
+      goals    <- sb_select("goals")
+      faceoffs <- sb_select("faceoffs")
+      hits     <- sb_select("hits")
+      games    <- sb_select("games", order = "game_date.asc")
+      analytics_data(list(
+        players  = players,
+        shots    = shots,
+        goals    = goals,
+        faceoffs = faceoffs,
+        hits     = hits,
+        games    = games,
+        n_games  = max(nrow(games), 1L)
+      ))
+    }, error = function(e) NULL)
+  }
+
+  # Load immediately on app start (no session required)
+  observe({ tryCatch(load_analytics(), error = function(e) NULL) })
+
+  # ============================================================
   # PLAYER ANALYSIS TAB
   # ============================================================
 
-  # Populate player dropdown once session starts
+  # Populate player dropdown from cache — no server=TRUE for fast response
   observe({
-    req(rv$setup_done, rv$players)
-    skater_choices <- rv$players[
-      !grepl("\\(G\\)", names(rv$players))   # exclude goalies
-    ]
-    updateSelectizeInput(session, "player_select",
-                         choices = skater_choices, server = TRUE)
-  })
-
-  # Warn if session not started
-  output$player_session_warn <- renderUI({
-    if (rv$setup_done) return(NULL)
-    div(class = "alert alert-warning",
-        icon("triangle-exclamation"),
-        " Go to the Setup tab first and start a session to load player data.")
-  })
-
-  # Load all data for analytics (reactive so it refreshes on demand)
-  all_analytics <- reactive({
-    req(rv$setup_done)
-    list(
-      players  = sb_select("players",  filters = c("active" = "eq.true")),
-      shots    = sb_select("shots"),
-      goals    = sb_select("goals"),
-      faceoffs = sb_select("faceoffs"),
-      hits     = sb_select("hits"),
-      n_games  = max(nrow(sb_select("games")), 1)
+    d <- analytics_data()
+    req(nrow(d$players) > 0)
+    choices <- setNames(
+      as.character(d$players$id),
+      paste0("#", d$players$jersey_num, "  ", d$players$full_name,
+             " (", d$players$position, ")")
     )
+    choices <- choices[!grepl("\\(G\\)", names(choices))]
+    updateSelectizeInput(session, "player_select", choices = choices)
   })
 
-  # Compute full team stats table (all players, all games)
+  # Soft status message (non-blocking)
+  output$player_session_warn <- renderUI({
+    if (nrow(analytics_data()$players) == 0)
+      div(class = "alert alert-info",
+          icon("circle-info"),
+          " Loading season data\u2026 stats will appear in a moment.")
+    else NULL
+  })
+
+  # Compute full team stats — pure computation from cache, no Supabase calls
   team_stats <- reactive({
-    d <- all_analytics()
+    d <- analytics_data()
+    req(nrow(d$players) > 0)
     compute_player_stats(
       players  = d$players,
       shots    = d$shots,
@@ -712,7 +817,7 @@ server <- function(input, output, session) {
 
   # ---- Percentile bars ----
   output$player_percentiles <- renderUI({
-    req(nrow(selected_player_stats()) > 0, nrow(team_stats()) > 1)
+    req(nrow(selected_player_stats()) > 0, nrow(team_stats()) >= 1)
     p  <- selected_player_stats()
     ts <- team_stats()
 
@@ -777,7 +882,7 @@ server <- function(input, output, session) {
   # ---- Personal shot map ----
   output$player_shot_map <- renderPlot({
     req(input$player_select)
-    d <- all_analytics()
+    d <- analytics_data()
 
     player_shots <- tryCatch({
       s <- d$shots
@@ -799,9 +904,9 @@ server <- function(input, output, session) {
   # ---- Game-by-game trend chart ----
   output$player_trend <- renderPlot({
     req(input$player_select)
-    d     <- all_analytics()
-    pid   <- as.integer(input$player_select)
-    games_df <- sb_select("games", order = "game_date.asc")
+    d        <- analytics_data()
+    pid      <- as.integer(input$player_select)
+    games_df <- d$games
 
     if (nrow(games_df) == 0) {
       plot.new(); text(0.5, 0.5, "No game data yet", cex = 1.2); return()

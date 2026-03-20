@@ -146,7 +146,11 @@ compute_player_stats <- function(players, shots, goals, faceoffs, hits, n_games 
                     fo_wins = integer(0))
 
   # --- combine ---
-  skaters <- players[players$position != "G" & players$active, ]
+  # Filter to skaters — guard against missing `active` column
+  active_flag <- if ("active" %in% names(players)) players$active
+                 else rep(TRUE, nrow(players))
+  skaters <- players[players$position != "G" & !is.na(players$position) &
+                       active_flag, ]
 
   out <- skaters |>
     dplyr::select(player_id = id, jersey_num, full_name, position) |>

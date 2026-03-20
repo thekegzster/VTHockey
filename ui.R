@@ -256,6 +256,32 @@ ui <- page_navbar(
                                       "Missed net"      = "missed",
                                       "Blocked"         = "blocked"),
                           width = "100%"),
+
+              # --- Goal details: only shown when result == "goal" ---
+              conditionalPanel(
+                condition = "input.shot_result == 'goal'",
+                div(
+                  style = paste0("border-left: 4px solid #861F41;",
+                                 " padding-left: 10px; margin: 6px 0;"),
+                  h6(tagList(icon("star"), " Goal Details"),
+                     class = "fw-bold mb-2",
+                     style = "color:#861F41;"),
+                  selectInput("shot_goal_situation", "Situation",
+                              choices = c("Even strength" = "even",
+                                          "Power play"    = "power_play",
+                                          "Short handed"  = "short_handed",
+                                          "Penalty shot"  = "penalty_shot"),
+                              width = "100%"),
+                  checkboxInput("shot_goal_empty_net", "Empty net goal",
+                                value = FALSE),
+                  # Assist fields only for VT goals
+                  conditionalPanel(
+                    condition = "input.shot_team == 'VT'",
+                    uiOutput("shot_goal_assist_fields")
+                  )
+                )
+              ),
+
               div(
                 id    = "shot_location_display",
                 class = "alert alert-info py-2 mb-2",
@@ -311,84 +337,78 @@ ui <- page_navbar(
   ),
 
   # ===========================================================
-  # TAB 5: GOALS & ON-ICE
+  # TAB 5: ON ICE TRACKER
   # ===========================================================
   nav_panel(
-    title = tagList(icon("star"), " Goals"),
-    value = "tab_goals",
+    title = tagList(icon("users"), " On Ice"),
+    value = "tab_on_ice",
 
-    div(class = "container-fluid py-4", style = "max-width: 750px;",
+    div(class = "container-fluid py-4", style = "max-width: 680px;",
 
-      uiOutput("session_required_goals"),
+      uiOutput("session_required_on_ice"),
+
+      # Current lineup banner — always visible at top
+      uiOutput("on_ice_banner"),
+
+      br(),
 
       card(
-        card_header(h4("Record a Goal", class = "mb-0")),
+        card_header(
+          div(class = "d-flex justify-content-between align-items-center",
+            h4("Update Line", class = "mb-0"),
+            tags$small("Type jersey numbers then hit Set Line",
+                       class = "text-muted")
+          )
+        ),
         card_body(
 
-          fluidRow(
-            column(4,
-              selectInput("goal_period", "Period", choices = PERIOD_CHOICES, width = "100%")
-            ),
-            column(4,
-              textInput("goal_time", "Time remaining (MM:SS)",
-                        placeholder = "14:23", width = "100%")
-            ),
-            column(4,
-              selectInput("goal_team", "Which team scored?",
-                          choices = c("VT" = "VT", "Opponent" = "opponent"),
-                          width = "100%")
-            )
+          # 5 large jersey number boxes
+          div(
+            class = "d-flex gap-3 justify-content-center mb-1",
+            lapply(1:5, function(i) {
+              div(
+                class = "text-center",
+                tags$input(
+                  id          = paste0("ice_", i),
+                  type        = "text",
+                  inputmode   = "numeric",
+                  maxlength   = "2",
+                  placeholder = "#",
+                  class       = "form-control jersey-box",
+                  autocomplete = "off"
+                ),
+                uiOutput(paste0("ice_lbl_", i))
+              )
+            })
           ),
 
-          hr(),
-          h6("Scoring Details", class = "fw-bold text-muted"),
+          br(),
 
-          uiOutput("goal_vt_fields"),  # shown/hidden based on goal_team
-
-          selectInput("goal_situation", "Situation",
-                      choices = c("Even strength"   = "even",
-                                  "Power play"      = "power_play",
-                                  "Short handed"    = "short_handed",
-                                  "Penalty shot"    = "penalty_shot"),
-                      width = "100%"),
-
-          checkboxInput("goal_empty_net", "Empty net goal", value = FALSE),
-
-          hr(),
-          h6("VT Players On Ice", class = "fw-bold text-muted"),
-          helpText("Select ALL VT players who were on the ice when the goal was scored (up to 6)."),
-
-          selectizeInput(
-            "on_ice_players",
-            label    = NULL,
-            choices  = NULL,
-            multiple = TRUE,
-            width    = "100%",
-            options  = list(
-              placeholder  = "Click to select players...",
-              maxItems     = 6,
-              closeAfterSelect = FALSE
-            )
+          actionButton(
+            "btn_set_line", "Set Line",
+            icon  = icon("check"),
+            class = "btn-success w-100",
+            style = "font-size:1.25rem; padding:14px; font-weight:700;"
           ),
+
+          br(), br(),
 
           div(
-            class = "d-flex gap-2 mt-3",
-            div(
-              class = "flex-grow-1",
-              actionButton("btn_submit_goal", "Submit Goal",
-                           icon = icon("check"), class = "btn-primary w-100",
-                           style = "font-size: 1.1rem; padding: 12px;")
-            ),
-            actionButton("btn_undo_goal", "Undo Last",
-                         icon = icon("rotate-left"), class = "btn-outline-danger")
+            class = "alert alert-light border",
+            style = "font-size:0.82rem;",
+            icon("circle-info"), " ",
+            "The active line is ", tags$b("automatically recorded"),
+            " with every shot logged in the Shots tab.",
+            " Update this whenever there is a line change."
           )
         )
       ),
 
       br(),
+
       card(
-        card_header("Recent Goal Entries"),
-        card_body(uiOutput("goal_log"))
+        card_header("Line Change Log"),
+        card_body(uiOutput("line_change_log"))
       )
     )
   ),
