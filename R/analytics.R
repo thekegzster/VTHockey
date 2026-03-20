@@ -59,11 +59,30 @@ add_xg <- function(df) {
 classify_danger <- function(x, y) {
   dist  <- sqrt((x - GOAL_X)^2 + (y - GOAL_Y)^2)
   angle <- abs(atan2(abs(y - GOAL_Y), abs(x - GOAL_X)) * 180 / pi)
+  in_crease_box <- (
+    x >= (GOAL_X - 8) & x <= GOAL_X &
+      y >= (GOAL_Y - 10) & y <= (GOAL_Y + 10)
+  )
+  inside_dots <- abs(y - GOAL_Y) <= 26
+  in_front_of_goal <- x <= GOAL_X
   dplyr::case_when(
+    !in_front_of_goal ~ "Low Danger",
+    in_crease_box ~ "High Danger",
     dist <= 25 & angle <= 45 ~ "High Danger",
-    dist <= 40               ~ "Medium Danger",
+    dist <= 40 & inside_dots ~ "Medium Danger",
     TRUE                     ~ "Low Danger"
   )
+}
+
+# --- Builds map of danger zone areas ---
+build_danger_zones <- function(res = 2) {
+  grid <- expand.grid(
+    x = seq(0, 200, by = res),
+    y = seq(0, 85, by = res)
+  )
+  
+  grid$zone <- mapply(classify_danger, grid$x, grid$y)
+  grid
 }
 
 # ============================================================
