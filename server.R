@@ -617,15 +617,20 @@ server <- function(input, output, session) {
     on_ice    = data.frame()
   )
 
+  # Guarantee a proper data frame regardless of what sb_select returns
+  safe_df <- function(x) {
+    if (is.null(x) || !is.data.frame(x)) data.frame() else x
+  }
+
   # Shared fetch function used by auto-refresh, manual button, and on-setup trigger
   do_refresh_summary <- function(silent = FALSE) {
     req(rv$game_id)
     gid <- paste0("eq.", rv$game_id)
-    summary_data$faceoffs  <- sb_select("faceoffs",  filters = c("game_id" = gid))
-    summary_data$turnovers <- sb_select("turnovers", filters = c("game_id" = gid))
-    summary_data$shots     <- sb_select("shots",     filters = c("game_id" = gid))
-    summary_data$goals    <- sb_select("goals",    filters = c("game_id" = gid))
-    summary_data$on_ice   <- sb_select("on_ice",   filters = c("game_id" = gid))
+    summary_data$faceoffs  <- safe_df(sb_select("faceoffs",  filters = c("game_id" = gid)))
+    summary_data$turnovers <- safe_df(sb_select("turnovers", filters = c("game_id" = gid)))
+    summary_data$shots     <- safe_df(sb_select("shots",     filters = c("game_id" = gid)))
+    summary_data$goals     <- safe_df(sb_select("goals",     filters = c("game_id" = gid)))
+    summary_data$on_ice    <- safe_df(sb_select("on_ice",    filters = c("game_id" = gid)))
     if (!silent) notify_ok("Summary data refreshed!")
   }
 
@@ -650,16 +655,21 @@ server <- function(input, output, session) {
   })
 
   output$summary_value_boxes <- renderUI({
-    n_shots    <- nrow(summary_data$shots)
-    n_goals    <- if (nrow(summary_data$goals) > 0 && "team" %in% names(summary_data$goals))
-      sum(summary_data$goals$team == "VT", na.rm = TRUE) else 0
-    n_takeaways <- if (nrow(summary_data$turnovers) > 0 && "type" %in% names(summary_data$turnovers))
-      sum(summary_data$turnovers$type == "takeaway", na.rm = TRUE) else 0
-    n_giveaways <- if (nrow(summary_data$turnovers) > 0 && "type" %in% names(summary_data$turnovers))
-      sum(summary_data$turnovers$type == "giveaway", na.rm = TRUE) else 0
-    n_faceoffs <- nrow(summary_data$faceoffs)
-    n_fo_wins  <- if (n_faceoffs > 0)
-      sum(summary_data$faceoffs$result == "win", na.rm = TRUE) else 0
+    shots_df     <- safe_df(summary_data$shots)
+    goals_df     <- safe_df(summary_data$goals)
+    turnovers_df <- safe_df(summary_data$turnovers)
+    faceoffs_df  <- safe_df(summary_data$faceoffs)
+
+    n_shots     <- nrow(shots_df)
+    n_goals     <- if (nrow(goals_df) > 0 && "team" %in% names(goals_df))
+      sum(goals_df$team == "VT", na.rm = TRUE) else 0
+    n_takeaways <- if (nrow(turnovers_df) > 0 && "type" %in% names(turnovers_df))
+      sum(turnovers_df$type == "takeaway", na.rm = TRUE) else 0
+    n_giveaways <- if (nrow(turnovers_df) > 0 && "type" %in% names(turnovers_df))
+      sum(turnovers_df$type == "giveaway", na.rm = TRUE) else 0
+    n_faceoffs  <- nrow(faceoffs_df)
+    n_fo_wins   <- if (n_faceoffs > 0 && "result" %in% names(faceoffs_df))
+      sum(faceoffs_df$result == "win", na.rm = TRUE) else 0
 
     stat_box <- function(label, value, color) {
       div(
@@ -682,7 +692,7 @@ server <- function(input, output, session) {
   })
 
   output$summary_shot_map <- renderPlot({
-    df <- summary_data$shots
+    df <- safe_df(summary_data$shots)
     shots_with_loc <- if (nrow(df) > 0 && "x_coord" %in% names(df))
       df[!is.na(df$x_coord), ] else NULL
     draw_rink(shots_df = shots_with_loc)
@@ -705,6 +715,7 @@ server <- function(input, output, session) {
   })
 
   make_dt <- function(df) {
+    df <- safe_df(df)
     if (nrow(df) == 0) return(datatable(data.frame(Message = "No data yet.")))
     datatable(df,
               options = list(pageLength = 15, scrollX = TRUE),
@@ -715,8 +726,8 @@ server <- function(input, output, session) {
   output$table_faceoffs  <- renderDT({ make_dt(summary_data$faceoffs) })
   output$table_turnovers <- renderDT({ make_dt(summary_data$turnovers) })
   output$table_shots     <- renderDT({ make_dt(summary_data$shots) })
-  output$table_goals    <- renderDT({ make_dt(summary_data$goals) })
-  output$table_on_ice   <- renderDT({ make_dt(summary_data$on_ice) })
+  output$table_goals     <- renderDT({ make_dt(summary_data$goals) })
+  output$table_on_ice    <- renderDT({ make_dt(summary_data$on_ice) })
 
   # ============================================================
   # SEASON ANALYTICS CACHE
