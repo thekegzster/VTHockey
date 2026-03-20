@@ -26,11 +26,11 @@ calc_xg <- function(x, y, shot_type = "wrist") {
 
   type_adj <- switch(as.character(shot_type),
     "tip"      =  0.30,
+    "one-timer" = 0.30,
     "snap"     =  0.08,
     "wrist"    =  0.00,
     "slap"     = -0.10,
     "backhand" = -0.22,
-    "other"    = -0.05,
     0.00
   )
 
