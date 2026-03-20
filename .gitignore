@@ -1,0 +1,15 @@
+# Credentials - NEVER commit this
+.env
+
+# R artifacts
+.Rhistory
+.RData
+.Rproj.user/
+*.Rproj
+
+# Generated reports (can be large HTML files)
+Data_Analysis/*.html
+
+# OS files
+.DS_Store
+Thumbs.db

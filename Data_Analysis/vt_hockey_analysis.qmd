@@ -1,0 +1,523 @@
+---
+title: "VT Hockey — Analytics Report"
+date: today
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-depth: 3
+    toc-title: "Contents"
+    embed-resources: true
+    code-fold: true
+    fig-width: 10
+    fig-height: 6
+params:
+  game_id:    null   # null = full season; integer = single game
+  game_label: "Full Season"
+execute:
+  warning: false
+  message: false
+---
+
+```{r setup}
+#| include: false
+
+library(dplyr)
+library(ggplot2)
+library(gt)
+library(tidyr)
+
+if (file.exists("../.env")) readRenviron("../.env")
+source("../R/supabase.R")
+source("../R/rink_plot.R")
+source("../R/analytics.R")
+```
+
+```{r load-data}
+#| include: false
+
+players  <- sb_select("players",  filters = c("active" = "eq.true"),
+                      order = "jersey_num.asc")
+games    <- sb_select("games",    order = "game_date.asc")
+faceoffs <- sb_select("faceoffs")
+hits     <- sb_select("hits")
+shots    <- sb_select("shots")
+goals    <- sb_select("goals")
+on_ice   <- sb_select("on_ice")
+
+# ── Filter to selected game if a game_id param was passed ──────────────────
+filter_by_game <- function(df) {
+  gid <- params$game_id
+  if (is.null(gid) || is.na(gid) || nrow(df) == 0) return(df)
+  df[df$game_id == as.integer(gid), ]
+}
+
+faceoffs <- filter_by_game(faceoffs)
+hits      <- filter_by_game(hits)
+shots     <- filter_by_game(shots)
+goals     <- filter_by_game(goals)
+on_ice    <- filter_by_game(on_ice)
+
+# ── Add xG to shots ─────────────────────────────────────────────────────────
+shots <- add_xg(shots)
+
+# ── Helper: join player name ─────────────────────────────────────────────────
+add_player_name <- function(df, id_col = "player_id") {
+  if (nrow(df) == 0) return(df)
+  df |> left_join(players |> select(id, jersey_num, full_name, position),
+                  by = setNames("id", id_col))
+}
+
+add_game_label <- function(df) {
+  if (nrow(df) == 0) return(df)
+  df |>
+    left_join(games |> select(id, game_date, opponent),
+              by = c("game_id" = "id")) |>
+    mutate(game_label = paste0(game_date, " vs ", opponent))
+}
+
+faceoffs <- faceoffs |> add_player_name() |> add_game_label()
+hits      <- hits     |> add_player_name() |> add_game_label()
+shots     <- shots    |> add_player_name() |> add_game_label()
+goals     <- goals    |>
+  left_join(players |> select(id, scorer_name = full_name,
+                              scorer_num = jersey_num),
+            by = c("scorer_id" = "id")) |>
+  add_game_label()
+on_ice <- on_ice |> add_player_name() |> add_game_label()
+
+# ── Compute full player stats table ─────────────────────────────────────────
+n_games_covered <- if (is.null(params$game_id)) nrow(games) else 1L
+player_stats <- compute_player_stats(
+  players  = players,
+  shots    = shots,
+  goals    = goals,
+  faceoffs = faceoffs,
+  hits     = hits,
+  n_games  = n_games_covered
+)
+
+vt_goals  <- sum(goals$team == "VT",       na.rm = TRUE)
+opp_goals <- sum(goals$team == "opponent", na.rm = TRUE)
+vt_shots  <- shots[!is.na(shots$team) & shots$team == "VT", ]
+```
+
+---
+
+# `r params$game_label`
+
+::: {.callout-note}
+`r if (is.null(params$game_id)) "Season aggregate — all games." else paste0("Single game report: ", params$game_label)`
+Data pulled live from Supabase at render time.
+:::
+
+```{r overview}
+#| echo: false
+fo_wins  <- sum(faceoffs$result == "win",  na.rm = TRUE)
+fo_total <- nrow(faceoffs)
+cat(sprintf(
+  "Games covered : %d\nScore         : VT %d — Opp %d\nShots         : %d\nFaceoffs      : %d W / %d (%.1f%%)\nTotal Hits    : %d\nTeam xG       : %.2f\n",
+  n_games_covered, vt_goals, opp_goals,
+  nrow(vt_shots), fo_wins, fo_total,
+  ifelse(fo_total > 0, fo_wins / fo_total * 100, 0),
+  nrow(hits),
+  sum(vt_shots$xg, na.rm = TRUE)
+))
+```
+
+---
+
+# Team Summary
+
+## Scoring & Shot Quality
+
+```{r team-scoring}
+#| echo: false
+if (nrow(vt_shots) == 0) {
+  cat("No shot data recorded yet.")
+} else {
+  vt_shots |>
+    summarise(
+      `Shots`          = n(),
+      `On Goal`        = sum(result %in% c("goal","save"), na.rm = TRUE),
+      `Goals`          = sum(result == "goal", na.rm = TRUE),
+      `Shooting %`     = paste0(round(mean(result == "goal", na.rm=TRUE)*100,1),"%"),
+      `Total xG`       = round(sum(xg, na.rm=TRUE), 2),
+      `Avg xG/Shot`    = round(mean(xg, na.rm=TRUE), 3),
+      `Goals − xG`     = round(sum(result == "goal", na.rm=TRUE) -
+                                sum(xg, na.rm=TRUE), 2)
+    ) |>
+    gt() |>
+    tab_header(title = "VT Team Shooting") |>
+    tab_style(style = cell_text(weight = "bold"),
+              locations = cells_column_labels())
+}
+```
+
+## Shot Results Breakdown
+
+```{r shot-results}
+#| echo: false
+if (nrow(vt_shots) == 0) {
+  cat("No shot data.")
+} else {
+  vt_shots |>
+    count(result, name = "Count") |>
+    mutate(
+      result = case_match(result,
+        "goal"    ~ "Goal",
+        "save"    ~ "On Goal (Save)",
+        "missed"  ~ "Missed Net",
+        "blocked" ~ "Blocked",
+        .default  = result),
+      `%` = paste0(round(Count/sum(Count)*100, 1), "%")
+    ) |>
+    arrange(desc(Count)) |>
+    gt() |>
+    tab_header(title = "Shot Attempt Breakdown") |>
+    cols_label(result = "Result")
+}
+```
+
+## Shot Danger Zones
+
+```{r danger-zones}
+#| echo: false
+if (nrow(vt_shots) == 0 || sum(!is.na(vt_shots$x_coord)) == 0) {
+  cat("No shot location data yet.")
+} else {
+  vt_shots |>
+    filter(!is.na(x_coord)) |>
+    mutate(zone = classify_danger(x_coord, y_coord)) |>
+    group_by(zone) |>
+    summarise(
+      Shots  = n(),
+      Goals  = sum(result == "goal", na.rm = TRUE),
+      xG     = round(sum(xg, na.rm = TRUE), 2),
+      `Shot%`= paste0(round(Goals/Shots*100, 1), "%"),
+      .groups = "drop"
+    ) |>
+    arrange(match(zone, c("High Danger","Medium Danger","Low Danger"))) |>
+    gt() |>
+    tab_header(title = "Shots by Danger Zone",
+               subtitle = "High Danger = within 25 ft, angle ≤ 45°") |>
+    data_color(columns = xG,
+               palette = c("#f4cccc","#861F41"))
+}
+```
+
+## Faceoffs
+
+```{r faceoffs-team}
+#| echo: false
+if (nrow(faceoffs) == 0) {
+  cat("No faceoff data.")
+} else {
+  faceoffs |>
+    group_by(zone) |>
+    summarise(Total = n(), Wins = sum(result=="win", na.rm=TRUE), .groups="drop") |>
+    mutate(`Win %` = paste0(round(Wins/Total*100,1),"%"),
+           zone = stringr::str_to_title(zone)) |>
+    arrange(desc(Total)) |>
+    gt() |>
+    tab_header(title = "Faceoffs by Zone")
+}
+```
+
+---
+
+# Player Summaries
+
+## Skater Stats
+
+```{r skater-table}
+#| echo: false
+if (nrow(player_stats) == 0) {
+  cat("No player data recorded yet.")
+} else {
+  player_stats |>
+    select(
+      `#`          = jersey_num,
+      Player       = full_name,
+      Pos          = position,
+      G            = goals,
+      A1           = a1,
+      A2           = a2,
+      PTS          = points,
+      S            = shots,
+      `S%`         = shoot_pct,
+      `xG`         = xg_total,
+      `G−xG`       = g_minus_xg,
+      `xG/S`       = xg_per_shot,
+      `HD%`        = hd_pct,
+      Hits         = hits,
+      `FO%`        = fo_pct
+    ) |>
+    gt() |>
+    tab_header(title = "VT Skater Stats") |>
+    tab_spanner("Scoring",     c(G, A1, A2, PTS)) |>
+    tab_spanner("Shooting",    c(S, `S%`, xG, `G−xG`, `xG/S`, `HD%`)) |>
+    tab_spanner("Physical",    c(Hits)) |>
+    tab_spanner("Faceoffs",    c(`FO%`)) |>
+    fmt_number(columns = c(xG, `G−xG`, `xG/S`), decimals = 2) |>
+    fmt_missing(columns = everything(), missing_text = "—") |>
+    data_color(
+      columns = `G−xG`,
+      palette = c("#d62020","#ffffff","#1655a2"),
+      domain  = c(-2, 2)
+    ) |>
+    tab_style(style = cell_text(weight = "bold"),
+              locations = cells_column_labels()) |>
+    cols_align(align = "center",
+               columns = c(G, A1, A2, PTS, S, `S%`, xG, `G−xG`,
+                           `xG/S`, `HD%`, Hits, `FO%`))
+}
+```
+
+**Column key:** G = Goals, A1/A2 = Primary/Secondary Assists, S% = Shooting %, xG = Expected Goals, G−xG = Goals above expected (positive = outperforming), xG/S = Shot quality, HD% = High danger shot %, FO% = Faceoff win %
+
+## Faceoff Leaderboard
+
+```{r fo-leaders}
+#| echo: false
+if (nrow(faceoffs) == 0) {
+  cat("No faceoff data.")
+} else {
+  faceoffs |>
+    group_by(full_name, jersey_num) |>
+    summarise(Total = n(), Wins = sum(result=="win", na.rm=TRUE), .groups="drop") |>
+    filter(Total >= 3) |>
+    mutate(`Win %` = round(Wins/Total*100,1),
+           Player  = paste0("#", jersey_num, " ", full_name)) |>
+    arrange(desc(`Win %`)) |>
+    select(Player, Total, Wins, `Win %`) |>
+    gt() |>
+    tab_header(title = "Faceoff Leaders", subtitle = "(min. 3 taken)") |>
+    data_color(columns = `Win %`, palette = c("#f4cccc","#d4edda"))
+}
+```
+
+## Hit Leaders
+
+```{r hit-leaders}
+#| echo: false
+if (nrow(hits) == 0) {
+  cat("No hit data.")
+} else {
+  hits |>
+    filter(hit_type == "delivered") |>
+    count(full_name, jersey_num, name = "Hits") |>
+    arrange(desc(Hits)) |>
+    mutate(Player = paste0("#", jersey_num, " ", full_name)) |>
+    select(Player, Hits) |>
+    gt() |>
+    tab_header(title = "Hit Leaders") |>
+    data_color(columns = Hits, palette = c("#fff3cd","#E5751F"))
+}
+```
+
+---
+
+# Shot Maps
+
+## All VT Shots
+
+```{r shot-map-all}
+#| echo: false
+#| fig-height: 5
+loc_shots <- vt_shots[!is.na(vt_shots$x_coord), ]
+if (nrow(loc_shots) == 0) cat("No shot location data yet.") else draw_rink(loc_shots)
+```
+
+## High Danger Zone Shots
+
+```{r shot-map-hd}
+#| echo: false
+#| fig-height: 5
+if (nrow(loc_shots) > 0) {
+  hd <- loc_shots |>
+    mutate(zone = classify_danger(x_coord, y_coord)) |>
+    filter(zone == "High Danger")
+  if (nrow(hd) > 0) draw_rink(hd) else cat("No high-danger shots recorded.")
+}
+```
+
+## Shots by Period
+
+```{r shot-map-period}
+#| echo: false
+#| fig-height: 5
+if (nrow(loc_shots) > 0) {
+  for (per in unique(loc_shots$period)) {
+    sub <- loc_shots[loc_shots$period == per, ]
+    lbl <- switch(per, "1"="1st Period","2"="2nd Period","3"="3rd Period",
+                  "OT"="Overtime", per)
+    p <- draw_rink(sub) +
+      labs(title = lbl) +
+      theme(plot.title = element_text(size=14, face="bold", color="#861F41"))
+    print(p)
+  }
+}
+```
+
+---
+
+# Advanced Analytics
+
+## xG Distribution by Player
+
+```{r xg-by-player}
+#| echo: false
+#| fig-height: 5
+if (nrow(player_stats) == 0 || sum(player_stats$xg_total) == 0) {
+  cat("No xG data yet.")
+} else {
+  player_stats |>
+    filter(shots > 0) |>
+    mutate(label = paste0("#", jersey_num, "\n", gsub(" .*","", full_name))) |>
+    ggplot(aes(x = reorder(label, xg_total))) +
+    geom_col(aes(y = xg_total), fill = "#861F41", alpha = 0.85) +
+    geom_col(aes(y = goals),    fill = "#E5751F", alpha = 0.9,
+             width = 0.4) +
+    coord_flip() +
+    labs(title = "xG vs Actual Goals by Player",
+         subtitle = "Maroon bars = xG total  |  Orange bars = actual goals",
+         x = NULL, y = "Value") +
+    theme_minimal(base_size = 12) +
+    theme(panel.grid.major.y = element_blank())
+}
+```
+
+## Goals Above Expected
+
+```{r g-minus-xg}
+#| echo: false
+#| fig-height: 4
+if (nrow(player_stats) == 0 || sum(player_stats$shots) == 0) {
+  cat("No data yet.")
+} else {
+  player_stats |>
+    filter(shots > 0) |>
+    mutate(
+      label = paste0("#", jersey_num, " ", full_name),
+      color = ifelse(g_minus_xg >= 0, "#1655a2", "#d62020")
+    ) |>
+    ggplot(aes(x = reorder(label, g_minus_xg), y = g_minus_xg, fill = color)) +
+    geom_col() +
+    geom_hline(yintercept = 0, linetype = "dashed") +
+    scale_fill_identity() +
+    coord_flip() +
+    labs(title = "Goals Above Expected (G − xG)",
+         subtitle = "Blue = outperforming expectation  |  Red = underperforming",
+         x = NULL, y = "G − xG") +
+    theme_minimal(base_size = 12) +
+    theme(panel.grid.major.y = element_blank())
+}
+```
+
+## Shot Quality vs Volume
+
+```{r quality-vs-volume}
+#| echo: false
+#| fig-height: 5
+if (nrow(player_stats) == 0 || sum(player_stats$shots) == 0) {
+  cat("No data yet.")
+} else {
+  player_stats |>
+    filter(shots >= 2) |>
+    mutate(label = paste0("#", jersey_num, " ", gsub(" .*","", full_name))) |>
+    ggplot(aes(x = shots_per_game, y = xg_per_shot, size = xg_total,
+               color = g_minus_xg, label = label)) +
+    geom_point(alpha = 0.8) +
+    geom_text(size = 3, color = "black", vjust = -1, check_overlap = TRUE) +
+    scale_color_gradient2(low = "#d62020", mid = "#f5a623", high = "#1655a2",
+                          midpoint = 0, name = "G−xG") +
+    scale_size_continuous(name = "xG Total", range = c(3, 10)) +
+    labs(title  = "Shot Quality vs Shot Volume",
+         subtitle = "Size = total xG  |  Colour = goals above/below expected",
+         x = "Shots per Game",
+         y = "Avg xG per Shot (Shot Quality)") +
+    theme_minimal(base_size = 12)
+}
+```
+
+---
+
+# On-Ice at Goals
+
+```{r on-ice}
+#| echo: false
+if (nrow(on_ice) == 0) {
+  cat("No on-ice data recorded yet.")
+} else {
+  on_ice |>
+    filter(team == "VT") |>
+    count(full_name, jersey_num, name = "Times On Ice") |>
+    arrange(desc(`Times On Ice`)) |>
+    mutate(Player = paste0("#", jersey_num, " ", full_name)) |>
+    select(Player, `Times On Ice`) |>
+    gt() |>
+    tab_header(title = "VT Players On Ice at Time of Goal",
+               subtitle = "(all goals — both teams)")
+}
+```
+
+---
+
+# Game-by-Game
+
+```{r game-by-game}
+#| echo: false
+if (nrow(games) == 0) {
+  cat("No games yet.")
+} else {
+  all_shots   <- sb_select("shots")
+  all_goals   <- sb_select("goals")
+  all_fo      <- sb_select("faceoffs")
+  all_hits    <- sb_select("hits")
+
+  if (nrow(all_shots) > 0) all_shots <- add_xg(all_shots)
+
+  games |>
+    left_join(all_goals |> filter(team=="VT") |> count(game_id, name="GF"),
+              by = c("id"="game_id")) |>
+    left_join(all_goals |> filter(team=="opponent") |> count(game_id, name="GA"),
+              by = c("id"="game_id")) |>
+    left_join(all_shots |> filter(!is.na(team) & team=="VT") |>
+                count(game_id, name="Shots"), by = c("id"="game_id")) |>
+    left_join(all_shots |> filter(!is.na(team) & team=="VT") |>
+                group_by(game_id) |>
+                summarise(xGF = round(sum(xg, na.rm=TRUE),2), .groups="drop"),
+              by = c("id"="game_id")) |>
+    left_join(all_fo |> filter(result=="win") |>
+                count(game_id, name="FO_W"), by = c("id"="game_id")) |>
+    left_join(all_fo |> count(game_id, name="FO_T"), by = c("id"="game_id")) |>
+    left_join(all_hits |> filter(hit_type=="delivered") |>
+                count(game_id, name="Hits"), by = c("id"="game_id")) |>
+    mutate(across(c(GF,GA,Shots,FO_W,FO_T,Hits), ~replace_na(.x, 0L)),
+           xGF    = replace_na(xGF, 0),
+           `FO%`  = paste0(round(FO_W/pmax(FO_T,1)*100,0),"%"),
+           Result = case_when(GF>GA~"W", GF<GA~"L", TRUE~"T")) |>
+    arrange(game_date) |>
+    select(Date=game_date, Opponent=opponent, Location=location,
+           Result, GF, GA, Shots, xGF, `FO%`, Hits) |>
+    gt() |>
+    tab_header(title = "Game-by-Game Results") |>
+    fmt_number(columns = xGF, decimals = 2) |>
+    tab_style(style = cell_fill(color="#d4edda"), locations=cells_body(rows=Result=="W")) |>
+    tab_style(style = cell_fill(color="#f4cccc"), locations=cells_body(rows=Result=="L")) |>
+    cols_align(align="center", columns=c(Result,GF,GA,Shots,xGF,`FO%`,Hits))
+}
+```
+
+---
+
+::: {.callout-note collapse="true"}
+## xG Model Notes
+Expected Goals (xG) are estimated using a logistic regression model trained on
+shot location and type. Inputs: distance from net, horizontal angle, shot type.
+Coefficients are calibrated so the average shot produces ~9–10% xG, consistent
+with NHL-wide shooting percentages. This is a simplified model — production NHL
+models also incorporate pre-shot movement, rush vs. zone entry, and goalie
+positioning.
+:::

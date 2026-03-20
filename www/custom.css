@@ -1,0 +1,61 @@
+/* VT Hockey Data Collector - Custom Styles */
+
+/* VT Color Variables */
+:root {
+  --vt-maroon: #861F41;
+  --vt-orange: #E5751F;
+}
+
+/* Navbar styling */
+.navbar {
+  background-color: var(--vt-maroon) !important;
+  border-bottom: 3px solid var(--vt-orange);
+}
+
+.navbar .navbar-brand,
+.navbar .nav-link {
+  color: white !important;
+}
+
+.navbar .nav-link:hover,
+.navbar .nav-link.active {
+  color: var(--vt-orange) !important;
+}
+
+/* Primary button */
+.btn-primary {
+  background-color: var(--vt-maroon) !important;
+  border-color: var(--vt-maroon) !important;
+}
+
+.btn-primary:hover {
+  background-color: #6a1832 !important;
+}
+
+/* Cards */
+.card-header {
+  background-color: #f7f0f2;
+  border-bottom: 2px solid var(--vt-maroon);
+  font-weight: 600;
+}
+
+/* Make submit buttons easier to tap on mobile */
+.btn-lg {
+  min-height: 52px;
+}
+
+/* Notification tweaks */
+.shiny-notification {
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+/* Rink plot container */
+#rink_plot {
+  cursor: crosshair;
+}
+
+/* Session banner */
+.alert.rounded-0 {
+  border-radius: 0 !important;
+}
