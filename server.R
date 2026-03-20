@@ -741,6 +741,7 @@ server <- function(input, output, session) {
     goals     = data.frame(),
     faceoffs  = data.frame(),
     turnovers = data.frame(),
+    on_ice    = data.frame(),
     games     = data.frame(),
     n_games   = 1L
   ))
@@ -755,6 +756,7 @@ server <- function(input, output, session) {
       goals     <- sb_select("goals")
       faceoffs  <- sb_select("faceoffs")
       turnovers <- sb_select("turnovers")
+      on_ice    <- sb_select("on_ice", select = "player_id,shot_id")
       games     <- sb_select("games", order = "game_date.asc")
       analytics_data(list(
         players   = players,
@@ -762,6 +764,7 @@ server <- function(input, output, session) {
         goals     = goals,
         faceoffs  = faceoffs,
         turnovers = turnovers,
+        on_ice    = on_ice,
         games     = games,
         n_games   = max(nrow(games), 1L)
       ))
@@ -807,6 +810,7 @@ server <- function(input, output, session) {
       goals     = d$goals,
       faceoffs  = d$faceoffs,
       turnovers = d$turnovers,
+      on_ice    = d$on_ice,
       n_games   = d$n_games
     )
   })
@@ -854,13 +858,34 @@ server <- function(input, output, session) {
       )
     }
 
-    fluidRow(
-      box(p$goals,      "Goals",         VT_MAROON),
-      box(p$a1 + p$a2,  "Assists",       "#2471a3"),
-      box(p$points,     "Points",        "#1a5276"),
-      box(p$shots,      "Shots",         "#6c757d"),
-      box(paste0(p$shoot_pct, "%"), "Shoot%", "#117a65"),
-      box(round(p$xg_total, 1), "xG Total", "#7d3c98")
+    pm_label    <- paste0(ifelse(p$plus_minus > 0, "+", ""), p$plus_minus)
+    xgpm_label  <- paste0(ifelse(p$xg_plus_minus > 0, "+", ""), round(p$xg_plus_minus, 2))
+    pm_color    <- if (p$plus_minus > 0) "#198754" else if (p$plus_minus < 0) "#dc3545" else "#6c757d"
+    xgpm_color  <- if (p$xg_plus_minus > 0) "#198754" else if (p$xg_plus_minus < 0) "#dc3545" else "#6c757d"
+
+    tagList(
+      fluidRow(
+        box(p$goals,      "Goals",         VT_MAROON),
+        box(p$a1 + p$a2,  "Assists",       "#2471a3"),
+        box(p$points,     "Points",        "#1a5276"),
+        box(p$shots,      "Shots",         "#6c757d"),
+        box(paste0(p$shoot_pct, "%"), "Shoot%", "#117a65"),
+        box(round(p$xg_total, 1), "xG Total", "#7d3c98")
+      ),
+      fluidRow(
+        column(3, div(class = "card text-center mb-3",
+          style = paste0("border-top:4px solid ", pm_color, ";"),
+          div(class = "card-body py-2",
+              h3(pm_label, style = paste0("color:", pm_color, "; font-weight:700; margin:0;")),
+              p("+/−  (Goals For − Against on Ice)", class = "mb-0 text-muted",
+                style = "font-size:0.8rem; font-weight:600;")))),
+        column(3, div(class = "card text-center mb-3",
+          style = paste0("border-top:4px solid ", xgpm_color, ";"),
+          div(class = "card-body py-2",
+              h3(xgpm_label, style = paste0("color:", xgpm_color, "; font-weight:700; margin:0;")),
+              p("xG+/−  (xG For − Against on Ice)", class = "mb-0 text-muted",
+                style = "font-size:0.8rem; font-weight:600;"))))
+      )
     )
   })
 
@@ -891,6 +916,12 @@ server <- function(input, output, session) {
               pct("takeaways_per_game")),
       pct_bar("Giveaways / Game \u2193", paste0(p$giveaways_per_game),
               100L - pct("giveaways_per_game")),
+      pct_bar("+/\u2212",
+              paste0(ifelse(p$plus_minus >= 0, "+", ""), p$plus_minus, " goals"),
+              pct("plus_minus")),
+      pct_bar("xG+/\u2212",
+              paste0(ifelse(p$xg_plus_minus >= 0, "+", ""), round(p$xg_plus_minus, 2), " xG"),
+              pct("xg_plus_minus")),
       if (!is.na(p$fo_pct))
         pct_bar("Faceoff Win %", paste0(p$fo_pct, "%  (", p$fo_total, " taken)"),
                 pct("fo_pct"))
@@ -924,6 +955,12 @@ server <- function(input, output, session) {
                  "Shots from ≤25 ft at angle ≤45°"),
       metric_row("avg xG per Shot", paste0(round(p$xg_per_shot, 3)),
                  "Shot quality: higher = more dangerous locations"),
+      metric_row("+/\u2212",
+                 paste0(ifelse(p$plus_minus >= 0, "+", ""), p$plus_minus),
+                 "Goals scored vs. allowed while on ice"),
+      metric_row("xG+/\u2212",
+                 paste0(ifelse(p$xg_plus_minus >= 0, "+", ""), round(p$xg_plus_minus, 2)),
+                 "Expected goals for minus against while on ice"),
       metric_row("Takeaways", p$takeaways, "Puck recoveries from opponents"),
       metric_row("Giveaways", p$giveaways, "Puck losses to opponents"),
       metric_row("TA/GA Ratio",

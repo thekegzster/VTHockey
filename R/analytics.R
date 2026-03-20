@@ -59,11 +59,89 @@ add_xg <- function(df) {
 classify_danger <- function(x, y) {
   dist  <- sqrt((x - GOAL_X)^2 + (y - GOAL_Y)^2)
   angle <- abs(atan2(abs(y - GOAL_Y), abs(x - GOAL_X)) * 180 / pi)
+  in_crease_box <- (
+    x >= (GOAL_X - 8) & x <= GOAL_X &
+      y >= (GOAL_Y - 10) & y <= (GOAL_Y + 10)
+  )
+  inside_dots <- abs(y - GOAL_Y) <= 26
+  in_front_of_goal <- x <= GOAL_X
   dplyr::case_when(
+    !in_front_of_goal ~ "Low Danger",
+    in_crease_box ~ "High Danger",
     dist <= 25 & angle <= 45 ~ "High Danger",
-    dist <= 40               ~ "Medium Danger",
+    dist <= 40 & inside_dots ~ "Medium Danger",
     TRUE                     ~ "Low Danger"
   )
+}
+
+# --- Builds map of danger zone areas ---
+build_danger_zones <- function(res = 2) {
+  grid <- expand.grid(
+    x = seq(0, 200, by = res),
+    y = seq(0, 85, by = res)
+  )
+  
+  grid$zone <- mapply(classify_danger, grid$x, grid$y)
+  grid
+}
+
+# ============================================================
+# PLUS / MINUS  &  xG PLUS / MINUS
+# Joins on_ice records to shots to compute for-vs-against stats.
+#
+# +/-    : +1 when a VT goal is scored while on ice,
+#          -1 when an opponent goal is scored while on ice.
+# xG+/-  : sum of xG for VT shots while on ice
+#          minus sum of xG for opponent shots while on ice.
+#          Opponent shot xG is calculated by mirroring x-coords
+#          (200 - x) so the same model applies to their net (x≈11).
+# ============================================================
+
+compute_plus_minus <- function(on_ice, shots) {
+  empty <- data.frame(player_id     = integer(0),
+                      plus_minus    = integer(0),
+                      xg_plus_minus = numeric(0))
+
+  if (is.null(on_ice)  || !is.data.frame(on_ice)  || nrow(on_ice)  == 0) return(empty)
+  if (is.null(shots)   || !is.data.frame(shots)   || nrow(shots)   == 0) return(empty)
+  if (!"shot_id"  %in% names(on_ice)) return(empty)
+  if (!"id"       %in% names(shots))  return(empty)
+  if (!"team"     %in% names(shots))  return(empty)
+  if (!"result"   %in% names(shots))  return(empty)
+
+  # Calculate xG for every shot; mirror x for opponent shots so the
+  # model targets their net (≈ x = 11) instead of VT's net (x = 189)
+  st_col <- if ("shot_type" %in% names(shots)) shots$shot_type else rep("wrist", nrow(shots))
+  tm_col <- shots$team
+
+  shots$xg_pm <- mapply(function(x, y, st, tm) {
+    if (is.na(x) || is.na(y)) return(0)
+    if (tm == "VT") calc_xg(x,       y, st)
+    else            calc_xg(200 - x, y, st)   # mirror to opponent net
+  }, shots$x_coord, shots$y_coord, st_col, tm_col)
+
+  # Join on_ice → shots on shot_id
+  oi <- on_ice[!is.na(on_ice$shot_id), c("player_id", "shot_id")]
+  s  <- shots[, c("id", "team", "result", "xg_pm")]
+  merged <- merge(oi, s, by.x = "shot_id", by.y = "id", all.x = FALSE)
+  if (nrow(merged) == 0) return(empty)
+
+  merged$pm_val <- dplyr::case_when(
+    merged$result == "goal" & merged$team == "VT"  ~  1L,
+    merged$result == "goal" & merged$team != "VT"  ~ -1L,
+    TRUE                                           ~  0L
+  )
+  merged$xg_val <- ifelse(merged$team == "VT",
+                           tidyr::replace_na(merged$xg_pm, 0),
+                          -tidyr::replace_na(merged$xg_pm, 0))
+
+  merged |>
+    dplyr::group_by(player_id) |>
+    dplyr::summarise(
+      plus_minus    = sum(pm_val,  na.rm = TRUE),
+      xg_plus_minus = round(sum(xg_val, na.rm = TRUE), 2),
+      .groups = "drop"
+    )
 }
 
 # ============================================================
@@ -71,7 +149,8 @@ classify_danger <- function(x, y) {
 # Returns one row per skater with all basic + advanced stats
 # ============================================================
 
-compute_player_stats <- function(players, shots, goals, faceoffs, turnovers, n_games = 1) {
+compute_player_stats <- function(players, shots, goals, faceoffs, turnovers,
+                                 on_ice = data.frame(), n_games = 1) {
 
   # guard: ensure required columns exist even on empty frames
   safe_nrow <- function(df) if (is.null(df) || nrow(df) == 0) 0L else nrow(df)
@@ -139,6 +218,9 @@ compute_player_stats <- function(players, shots, goals, faceoffs, turnovers, n_g
   } else data.frame(player_id = integer(0), takeaways = integer(0),
                     giveaways = integer(0))
 
+  # --- plus/minus stats ---
+  pm_stats <- compute_plus_minus(on_ice, shots)
+
   # --- faceoff stats ---
   fo_stats <- if (nrow(faceoffs) > 0) {
     faceoffs |>
@@ -160,18 +242,21 @@ compute_player_stats <- function(players, shots, goals, faceoffs, turnovers, n_g
 
   out <- skaters |>
     dplyr::select(player_id = id, jersey_num, full_name, position) |>
-    dplyr::left_join(scorer_g,  by = "player_id") |>
-    dplyr::left_join(a1,        by = "player_id") |>
-    dplyr::left_join(a2,        by = "player_id") |>
-    dplyr::left_join(shot_stats, by = "player_id") |>
+    dplyr::left_join(scorer_g,       by = "player_id") |>
+    dplyr::left_join(a1,             by = "player_id") |>
+    dplyr::left_join(a2,             by = "player_id") |>
+    dplyr::left_join(shot_stats,     by = "player_id") |>
     dplyr::left_join(turnover_stats, by = "player_id") |>
-    dplyr::left_join(fo_stats,   by = "player_id") |>
+    dplyr::left_join(fo_stats,       by = "player_id") |>
+    dplyr::left_join(pm_stats,       by = "player_id") |>
     dplyr::mutate(
       dplyr::across(c(goals, a1, a2, shots, goals_shot, on_goal,
                       high_danger, takeaways, giveaways, fo_total, fo_wins),
                     ~ tidyr::replace_na(.x, 0L)),
       dplyr::across(c(xg_total, xg_per_shot),
                     ~ tidyr::replace_na(.x, 0.0)),
+      plus_minus    = tidyr::replace_na(plus_minus,    0L),
+      xg_plus_minus = tidyr::replace_na(xg_plus_minus, 0.0),
       points      = goals + a1 + a2,
       shoot_pct   = ifelse(shots > 0,  round(goals / shots * 100, 1),  0.0),
       on_goal_pct = ifelse(shots > 0,  round(on_goal / shots * 100, 1), 0.0),

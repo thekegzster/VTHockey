@@ -133,6 +133,32 @@ draw_rink <- function(shots_df = NULL, pending_x = NULL, pending_y = NULL) {
       legend.text      = element_text(size = 10),
       plot.margin      = margin(4, 4, 4, 4)
     )
+  
+  # --- Danger zones layer ---
+  zones <- build_danger_zones(res = 1)
+  zones <- zones[zones$zone != "Low Danger", ]
+  
+  center_x <- 100
+  
+  zones_mirror <- zones
+  zones_mirror$x <- 2 * center_x - zones$x
+  
+  zones_all <- dplyr::bind_rows(zones, zones_mirror)
+  
+  p <- p +
+    geom_raster(
+      data = zones_all,
+      aes(x = x, y = y, fill = zone),
+      alpha = 0.25,
+      interpolate = TRUE
+    ) +
+    scale_fill_manual(
+      values = c(
+        "High Danger"   = "#d62020",
+        "Medium Danger" = "#f5a623"
+      ),
+      name = "Danger Zone"
+    )
 
   # --- Plot shots if provided ---
   if (!is.null(shots_df) && is.data.frame(shots_df) && nrow(shots_df) > 0) {
