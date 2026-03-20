@@ -351,8 +351,12 @@ server <- function(input, output, session) {
   # ----------------------------------------------------------
   observeEvent(input$btn_submit_shot, {
     req(rv$setup_done)
-    if (is.null(input$shot_player) || input$shot_player == "") {
-      notify_err("Please select a player."); return()
+
+    is_vt <- !is.null(input$shot_team) && input$shot_team == "VT"
+
+    # Only require a player selection for VT shots
+    if (is_vt && (is.null(input$shot_player) || input$shot_player == "")) {
+      notify_err("Please select a VT player."); return()
     }
 
     disable("btn_submit_shot")
@@ -362,7 +366,7 @@ server <- function(input, output, session) {
       game_id        = rv$game_id,
       period         = input$shot_period,
       game_time      = trimws(input$shot_time),
-      player_id      = as.integer(input$shot_player),
+      player_id      = if (is_vt) as.integer(input$shot_player) else NULL,
       shot_type      = input$shot_type,
       result         = input$shot_result,
       team           = input$shot_team,
@@ -370,20 +374,23 @@ server <- function(input, output, session) {
       y_coord        = rv$pending_shot_y,
       collector_name = rv$collector_name
     )
-    # Remove NULL coordinates so Supabase stores NULL in DB
+    # Remove NULLs so Supabase stores NULL in DB
     shot_data <- Filter(Negate(is.null), shot_data)
 
     result <- sb_insert("shots", shot_data)
 
     if (result$success) {
       rv$last_shot_id <- result$id
-      player_label <- names(rv$players[rv$players == input$shot_player])
+      who <- if (is_vt) {
+        names(rv$players[rv$players == input$shot_player])
+      } else {
+        "Opponent"
+      }
       loc_str <- if (!is.null(rv$pending_shot_x))
         paste0(" @ (", rv$pending_shot_x, ",", rv$pending_shot_y, ")") else ""
       entry <- paste0(input$shot_period, "P  ", input$shot_time, "  ",
-                      player_label, "  — ", input$shot_result, loc_str)
+                      who, "  \u2014 ", input$shot_result, loc_str)
       rv$shot_log <- c(list(entry), rv$shot_log)[1:min(5, length(rv$shot_log) + 1)]
-      # Clear the pending location after submit
       rv$pending_shot_x <- NULL
       rv$pending_shot_y <- NULL
       notify_ok("Shot recorded!")
@@ -512,17 +519,36 @@ server <- function(input, output, session) {
     on_ice   = data.frame()
   )
 
-  observeEvent(input$btn_refresh_summary, {
+  # Shared fetch function used by auto-refresh, manual button, and on-setup trigger
+  do_refresh_summary <- function(silent = FALSE) {
     req(rv$game_id)
     gid <- paste0("eq.", rv$game_id)
-
     summary_data$faceoffs <- sb_select("faceoffs", filters = c("game_id" = gid))
     summary_data$hits     <- sb_select("hits",     filters = c("game_id" = gid))
     summary_data$shots    <- sb_select("shots",    filters = c("game_id" = gid))
     summary_data$goals    <- sb_select("goals",    filters = c("game_id" = gid))
     summary_data$on_ice   <- sb_select("on_ice",   filters = c("game_id" = gid))
+    if (!silent) notify_ok("Summary data refreshed!")
+  }
 
-    notify_ok("Summary data refreshed!")
+  # Auto-refresh every 30 seconds when a game is active
+  observe({
+    invalidateLater(30000)
+    if (!is.null(rv$game_id)) {
+      tryCatch(do_refresh_summary(silent = TRUE), error = function(e) NULL)
+    }
+  })
+
+  # Load once immediately when session setup completes
+  observeEvent(rv$setup_done, {
+    req(rv$setup_done)
+    tryCatch(do_refresh_summary(silent = TRUE), error = function(e) NULL)
+  })
+
+  # Manual refresh button still works
+  observeEvent(input$btn_refresh_summary, {
+    tryCatch(do_refresh_summary(silent = FALSE), error = function(e)
+      notify_err("Could not refresh summary."))
   })
 
   output$summary_value_boxes <- renderUI({

@@ -239,9 +239,15 @@ ui <- page_navbar(
                   textInput("shot_time", "Time (MM:SS)", placeholder = "14:23", width = "100%")
                 )
               ),
-              selectizeInput("shot_player", "VT Player",
-                             choices = NULL, width = "100%",
-                             options = list(placeholder = "Start typing name or #...")),
+              selectInput("shot_team", "Team shooting",
+                          choices = c("VT" = "VT", "Opponent" = "opponent"),
+                          width = "100%"),
+              conditionalPanel(
+                condition = "input.shot_team == 'VT'",
+                selectizeInput("shot_player", "VT Player",
+                               choices = NULL, width = "100%",
+                               options = list(placeholder = "Start typing name or #..."))
+              ),
               selectInput("shot_type", "Shot type",
                           choices = SHOT_TYPE_CHOICES, width = "100%"),
               selectInput("shot_result", "Result",
@@ -249,9 +255,6 @@ ui <- page_navbar(
                                       "Goal"            = "goal",
                                       "Missed net"      = "missed",
                                       "Blocked"         = "blocked"),
-                          width = "100%"),
-              selectInput("shot_team", "Team shooting",
-                          choices = c("VT" = "VT", "Opponent" = "opponent"),
                           width = "100%"),
               div(
                 id    = "shot_location_display",
