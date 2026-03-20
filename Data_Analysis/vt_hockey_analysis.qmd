@@ -39,9 +39,9 @@ source("../R/analytics.R")
 players  <- sb_select("players",  filters = c("active" = "eq.true"),
                       order = "jersey_num.asc")
 games    <- sb_select("games",    order = "game_date.asc")
-faceoffs <- sb_select("faceoffs")
-hits     <- sb_select("hits")
-shots    <- sb_select("shots")
+faceoffs  <- sb_select("faceoffs")
+turnovers <- sb_select("turnovers")
+shots     <- sb_select("shots")
 goals    <- sb_select("goals")
 on_ice   <- sb_select("on_ice")
 
@@ -52,8 +52,8 @@ filter_by_game <- function(df) {
   df[df$game_id == as.integer(gid), ]
 }
 
-faceoffs <- filter_by_game(faceoffs)
-hits      <- filter_by_game(hits)
+faceoffs  <- filter_by_game(faceoffs)
+turnovers <- filter_by_game(turnovers)
 shots     <- filter_by_game(shots)
 goals     <- filter_by_game(goals)
 on_ice    <- filter_by_game(on_ice)
@@ -76,9 +76,9 @@ add_game_label <- function(df) {
     mutate(game_label = paste0(game_date, " vs ", opponent))
 }
 
-faceoffs <- faceoffs |> add_player_name() |> add_game_label()
-hits      <- hits     |> add_player_name() |> add_game_label()
-shots     <- shots    |> add_player_name() |> add_game_label()
+faceoffs  <- faceoffs  |> add_player_name() |> add_game_label()
+turnovers <- turnovers |> add_player_name() |> add_game_label()
+shots     <- shots     |> add_player_name() |> add_game_label()
 goals     <- goals    |>
   left_join(players |> select(id, scorer_name = full_name,
                               scorer_num = jersey_num),
@@ -89,12 +89,12 @@ on_ice <- on_ice |> add_player_name() |> add_game_label()
 # ── Compute full player stats table ─────────────────────────────────────────
 n_games_covered <- if (is.null(params$game_id)) nrow(games) else 1L
 player_stats <- compute_player_stats(
-  players  = players,
-  shots    = shots,
-  goals    = goals,
-  faceoffs = faceoffs,
-  hits     = hits,
-  n_games  = n_games_covered
+  players   = players,
+  shots     = shots,
+  goals     = goals,
+  faceoffs  = faceoffs,
+  turnovers = turnovers,
+  n_games   = n_games_covered
 )
 
 vt_goals  <- sum(goals$team == "VT",       na.rm = TRUE)
@@ -120,7 +120,7 @@ cat(sprintf(
   n_games_covered, vt_goals, opp_goals,
   nrow(vt_shots), fo_wins, fo_total,
   ifelse(fo_total > 0, fo_wins / fo_total * 100, 0),
-  nrow(hits),
+  sum(turnovers$type == "takeaway", na.rm = TRUE),
   sum(vt_shots$xg, na.rm = TRUE)
 ))
 ```
@@ -250,14 +250,15 @@ if (nrow(player_stats) == 0) {
       `G−xG`       = g_minus_xg,
       `xG/S`       = xg_per_shot,
       `HD%`        = hd_pct,
-      Hits         = hits,
+      Takeaways    = takeaways,
+      Giveaways    = giveaways,
       `FO%`        = fo_pct
     ) |>
     gt() |>
     tab_header(title = "VT Skater Stats") |>
     tab_spanner("Scoring",     c(G, A1, A2, PTS)) |>
     tab_spanner("Shooting",    c(S, `S%`, xG, `G−xG`, `xG/S`, `HD%`)) |>
-    tab_spanner("Physical",    c(Hits)) |>
+    tab_spanner("Turnovers",   c(Takeaways, Giveaways)) |>
     tab_spanner("Faceoffs",    c(`FO%`)) |>
     fmt_number(columns = c(xG, `G−xG`, `xG/S`), decimals = 2) |>
     fmt_missing(columns = everything(), missing_text = "—") |>
@@ -270,7 +271,7 @@ if (nrow(player_stats) == 0) {
               locations = cells_column_labels()) |>
     cols_align(align = "center",
                columns = c(G, A1, A2, PTS, S, `S%`, xG, `G−xG`,
-                           `xG/S`, `HD%`, Hits, `FO%`))
+                           `xG/S`, `HD%`, Takeaways, Giveaways, `FO%`))
 }
 ```
 
@@ -297,22 +298,29 @@ if (nrow(faceoffs) == 0) {
 }
 ```
 
-## Hit Leaders
+## Turnover Leaders
 
-```{r hit-leaders}
+```{r turnover-leaders}
 #| echo: false
-if (nrow(hits) == 0) {
-  cat("No hit data.")
+if (nrow(turnovers) == 0) {
+  cat("No turnover data.")
 } else {
-  hits |>
-    filter(hit_type == "delivered") |>
-    count(full_name, jersey_num, name = "Hits") |>
-    arrange(desc(Hits)) |>
-    mutate(Player = paste0("#", jersey_num, " ", full_name)) |>
-    select(Player, Hits) |>
+  turnovers |>
+    group_by(full_name, jersey_num, type) |>
+    summarise(n = n(), .groups = "drop") |>
+    tidyr::pivot_wider(names_from = type, values_from = n,
+                       values_fill = 0) |>
+    mutate(
+      takeaways = if ("takeaway" %in% names(pick(everything()))) takeaway else 0L,
+      giveaways = if ("giveaway" %in% names(pick(everything()))) giveaway else 0L,
+      net       = takeaways - giveaways
+    ) |>
+    select(Player = full_name, `#` = jersey_num,
+           Takeaways = takeaways, Giveaways = giveaways, Net = net) |>
+    arrange(desc(Takeaways)) |>
     gt() |>
-    tab_header(title = "Hit Leaders") |>
-    data_color(columns = Hits, palette = c("#fff3cd","#E5751F"))
+    tab_header(title = "Turnover Leaders") |>
+    data_color(columns = Takeaways, palette = c("#fff3cd","#198754"))
 }
 ```
 
@@ -474,7 +482,7 @@ if (nrow(games) == 0) {
   all_shots   <- sb_select("shots")
   all_goals   <- sb_select("goals")
   all_fo      <- sb_select("faceoffs")
-  all_hits    <- sb_select("hits")
+  all_hits    <- sb_select("turnovers")
 
   if (nrow(all_shots) > 0) all_shots <- add_xg(all_shots)
 
@@ -492,21 +500,21 @@ if (nrow(games) == 0) {
     left_join(all_fo |> filter(result=="win") |>
                 count(game_id, name="FO_W"), by = c("id"="game_id")) |>
     left_join(all_fo |> count(game_id, name="FO_T"), by = c("id"="game_id")) |>
-    left_join(all_hits |> filter(hit_type=="delivered") |>
-                count(game_id, name="Hits"), by = c("id"="game_id")) |>
-    mutate(across(c(GF,GA,Shots,FO_W,FO_T,Hits), ~replace_na(.x, 0L)),
+    left_join(all_hits |> filter(type=="takeaway") |>
+                count(game_id, name="TAs"), by = c("id"="game_id")) |>
+    mutate(across(c(GF,GA,Shots,FO_W,FO_T,TAs), ~replace_na(.x, 0L)),
            xGF    = replace_na(xGF, 0),
            `FO%`  = paste0(round(FO_W/pmax(FO_T,1)*100,0),"%"),
            Result = case_when(GF>GA~"W", GF<GA~"L", TRUE~"T")) |>
     arrange(game_date) |>
     select(Date=game_date, Opponent=opponent, Location=location,
-           Result, GF, GA, Shots, xGF, `FO%`, Hits) |>
+           Result, GF, GA, Shots, xGF, `FO%`, TAs) |>
     gt() |>
     tab_header(title = "Game-by-Game Results") |>
     fmt_number(columns = xGF, decimals = 2) |>
     tab_style(style = cell_fill(color="#d4edda"), locations=cells_body(rows=Result=="W")) |>
     tab_style(style = cell_fill(color="#f4cccc"), locations=cells_body(rows=Result=="L")) |>
-    cols_align(align="center", columns=c(Result,GF,GA,Shots,xGF,`FO%`,Hits))
+    cols_align(align="center", columns=c(Result,GF,GA,Shots,xGF,`FO%`,TAs))
 }
 ```
 

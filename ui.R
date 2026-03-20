@@ -163,44 +163,55 @@ ui <- page_navbar(
   ),
 
   # ===========================================================
-  # TAB 3: HITS
+  # TAB 3: GIVEAWAYS / TAKEAWAYS
   # ===========================================================
   nav_panel(
-    title = tagList(icon("bolt"), " Hits"),
-    value = "tab_hits",
+    title = tagList(icon("right-left"), " Turnovers"),
+    value = "tab_turnovers",
 
     div(class = "container-fluid py-4", style = "max-width: 600px;",
 
-      uiOutput("session_required_hits"),
+      uiOutput("session_required_turnovers"),
 
       card(
-        card_header(h4("Record a Hit", class = "mb-0")),
+        card_header(h4("Record a Turnover", class = "mb-0")),
         card_body(
           fluidRow(
             column(6,
-              selectInput("hit_period", "Period", choices = PERIOD_CHOICES, width = "100%")
+              selectInput("to_period", "Period", choices = PERIOD_CHOICES, width = "100%")
             ),
             column(6,
-              textInput("hit_time", "Time remaining (MM:SS)",
+              textInput("to_time", "Time remaining (MM:SS)",
                         placeholder = "14:23", width = "100%")
             )
           ),
-          selectizeInput("hit_player", "VT Player",
+          selectizeInput("to_player", "VT Player",
                          choices = NULL, width = "100%",
                          options = list(placeholder = "Start typing name or #...")),
-          selectInput("hit_type", "Hit type",
-                      choices = c("VT player delivered a hit" = "delivered",
-                                  "VT player received a hit"  = "received"),
-                      width = "100%"),
+          fluidRow(
+            column(6,
+              selectInput("to_type", "Type",
+                          choices = c("Takeaway (VT gains puck)"  = "takeaway",
+                                      "Giveaway (VT loses puck)"  = "giveaway"),
+                          width = "100%")
+            ),
+            column(6,
+              selectInput("to_zone", "Zone",
+                          choices = c("Offensive zone" = "offensive",
+                                      "Neutral zone"   = "neutral",
+                                      "Defensive zone" = "defensive"),
+                          width = "100%")
+            )
+          ),
           div(
             class = "d-flex gap-2 mt-3",
             div(
               class = "flex-grow-1",
-              actionButton("btn_submit_hit", "Submit Hit",
+              actionButton("btn_submit_to", "Submit Turnover",
                            icon = icon("check"), class = "btn-primary w-100",
                            style = "font-size: 1.1rem; padding: 12px;")
             ),
-            actionButton("btn_undo_hit", "Undo Last",
+            actionButton("btn_undo_to", "Undo Last",
                          icon = icon("rotate-left"), class = "btn-outline-danger")
           )
         )
@@ -208,8 +219,8 @@ ui <- page_navbar(
 
       br(),
       card(
-        card_header("Recent Hit Entries"),
-        card_body(uiOutput("hit_log"))
+        card_header("Recent Turnover Entries"),
+        card_body(uiOutput("to_log"))
       )
     )
   ),
@@ -460,9 +471,9 @@ ui <- page_navbar(
           br(),
           DTOutput("table_faceoffs")
         ),
-        tabPanel("Hits",
+        tabPanel("Turnovers",
           br(),
-          DTOutput("table_hits")
+          DTOutput("table_turnovers")
         ),
         tabPanel("Shots",
           br(),

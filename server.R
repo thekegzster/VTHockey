@@ -21,13 +21,13 @@ server <- function(input, output, session) {
 
     # Rolling logs of recent entries (list of character strings)
     faceoff_log = list(),
-    hit_log     = list(),
+    to_log      = list(),
     shot_log    = list(),
     goal_log    = list(),
 
     # Most recent record id for each table (for undo)
     last_faceoff_id = NULL,
-    last_hit_id     = NULL,
+    last_to_id      = NULL,
     last_shot_id    = NULL,
     last_goal_id    = NULL,
 
@@ -120,7 +120,7 @@ server <- function(input, output, session) {
 
     # Populate all player dropdowns across tabs
     updateSelectizeInput(session, "fo_player",      choices = players, server = TRUE)
-    updateSelectizeInput(session, "hit_player",     choices = players, server = TRUE)
+    updateSelectizeInput(session, "to_player",      choices = players, server = TRUE)
     updateSelectizeInput(session, "shot_player",    choices = players, server = TRUE)
     updateSelectizeInput(session, "goal_scorer",    choices = players, server = TRUE)
     updateSelectizeInput(session, "goal_assist1",
@@ -163,8 +163,8 @@ server <- function(input, output, session) {
     })
   }
 
-  output$session_required_faceoffs <- session_required_ui("faceoffs")
-  output$session_required_hits     <- session_required_ui("hits")
+  output$session_required_faceoffs  <- session_required_ui("faceoffs")
+  output$session_required_turnovers <- session_required_ui("turnovers")
   output$session_required_shots    <- session_required_ui("shots")
   output$session_required_goals    <- session_required_ui("goals")
 
@@ -395,54 +395,57 @@ server <- function(input, output, session) {
   })
 
   # ----------------------------------------------------------
-  # SUBMIT HIT
+  # SUBMIT TURNOVER
   # ----------------------------------------------------------
-  observeEvent(input$btn_submit_hit, {
+  observeEvent(input$btn_submit_to, {
     req(rv$setup_done)
-    if (is.null(input$hit_player) || input$hit_player == "") {
+    if (is.null(input$to_player) || input$to_player == "") {
       notify_err("Please select a player."); return()
     }
 
-    disable("btn_submit_hit")
-    on.exit(enable("btn_submit_hit"))
+    disable("btn_submit_to")
+    on.exit(enable("btn_submit_to"))
 
-    result <- sb_insert("hits", list(
+    result <- sb_insert("turnovers", list(
       game_id        = rv$game_id,
-      period         = input$hit_period,
-      game_time      = trimws(input$hit_time),
-      player_id      = as.integer(input$hit_player),
-      hit_type       = input$hit_type,
+      period         = input$to_period,
+      game_time      = trimws(input$to_time),
+      player_id      = as.integer(input$to_player),
+      type           = input$to_type,
+      zone           = input$to_zone,
       collector_name = rv$collector_name
     ))
 
     if (result$success) {
-      rv$last_hit_id <- result$id
-      player_label <- names(rv$players[rv$players == input$hit_player])
-      entry <- paste0(input$hit_period, "P  ", input$hit_time, "  ",
-                      player_label, "  — ", input$hit_type)
-      rv$hit_log <- c(list(entry), rv$hit_log)[1:min(5, length(rv$hit_log) + 1)]
-      notify_ok("Hit recorded!")
+      rv$last_to_id <- result$id
+      player_label  <- names(rv$players[rv$players == input$to_player])
+      type_label    <- if (input$to_type == "takeaway") "TAKEAWAY" else "GIVEAWAY"
+      entry <- paste0(input$to_period, "P  ", input$to_time, "  ",
+                      player_label, "  \u2014 ", type_label,
+                      "  (", input$to_zone, ")")
+      rv$to_log <- c(list(entry), rv$to_log)[1:min(5, length(rv$to_log) + 1)]
+      notify_ok(if (input$to_type == "takeaway") "Takeaway recorded!" else "Giveaway recorded.")
       tryCatch(load_analytics(), error = function(e) NULL)
     } else {
       notify_err(result$error)
     }
   })
 
-  observeEvent(input$btn_undo_hit, {
-    req(!is.null(rv$last_hit_id))
-    res <- sb_delete("hits", rv$last_hit_id)
+  observeEvent(input$btn_undo_to, {
+    req(!is.null(rv$last_to_id))
+    res <- sb_delete("turnovers", rv$last_to_id)
     if (res$success) {
-      rv$last_hit_id <- NULL
-      rv$hit_log <- rv$hit_log[-1]
-      notify_ok("Last hit entry deleted.")
+      rv$last_to_id <- NULL
+      rv$to_log     <- rv$to_log[-1]
+      notify_ok("Last turnover entry deleted.")
     } else {
       notify_err("Could not undo — record may be too old.")
     }
   })
 
-  output$hit_log <- renderUI({
-    if (length(rv$hit_log) == 0) return(p("No entries yet."))
-    tags$ol(lapply(rv$hit_log, tags$li))
+  output$to_log <- renderUI({
+    if (length(rv$to_log) == 0) return(p("No entries yet."))
+    tags$ol(lapply(rv$to_log, tags$li))
   })
 
   # ----------------------------------------------------------
@@ -583,20 +586,20 @@ server <- function(input, output, session) {
   # SUMMARY TAB
   # ----------------------------------------------------------
   summary_data <- reactiveValues(
-    faceoffs = data.frame(),
-    hits     = data.frame(),
-    shots    = data.frame(),
-    goals    = data.frame(),
-    on_ice   = data.frame()
+    faceoffs  = data.frame(),
+    turnovers = data.frame(),
+    shots     = data.frame(),
+    goals     = data.frame(),
+    on_ice    = data.frame()
   )
 
   # Shared fetch function used by auto-refresh, manual button, and on-setup trigger
   do_refresh_summary <- function(silent = FALSE) {
     req(rv$game_id)
     gid <- paste0("eq.", rv$game_id)
-    summary_data$faceoffs <- sb_select("faceoffs", filters = c("game_id" = gid))
-    summary_data$hits     <- sb_select("hits",     filters = c("game_id" = gid))
-    summary_data$shots    <- sb_select("shots",    filters = c("game_id" = gid))
+    summary_data$faceoffs  <- sb_select("faceoffs",  filters = c("game_id" = gid))
+    summary_data$turnovers <- sb_select("turnovers", filters = c("game_id" = gid))
+    summary_data$shots     <- sb_select("shots",     filters = c("game_id" = gid))
     summary_data$goals    <- sb_select("goals",    filters = c("game_id" = gid))
     summary_data$on_ice   <- sb_select("on_ice",   filters = c("game_id" = gid))
     if (!silent) notify_ok("Summary data refreshed!")
@@ -626,7 +629,10 @@ server <- function(input, output, session) {
     n_shots    <- nrow(summary_data$shots)
     n_goals    <- if (nrow(summary_data$goals) > 0 && "team" %in% names(summary_data$goals))
       sum(summary_data$goals$team == "VT", na.rm = TRUE) else 0
-    n_hits     <- nrow(summary_data$hits)
+    n_takeaways <- if (nrow(summary_data$turnovers) > 0 && "type" %in% names(summary_data$turnovers))
+      sum(summary_data$turnovers$type == "takeaway", na.rm = TRUE) else 0
+    n_giveaways <- if (nrow(summary_data$turnovers) > 0 && "type" %in% names(summary_data$turnovers))
+      sum(summary_data$turnovers$type == "giveaway", na.rm = TRUE) else 0
     n_faceoffs <- nrow(summary_data$faceoffs)
     n_fo_wins  <- if (n_faceoffs > 0)
       sum(summary_data$faceoffs$result == "win", na.rm = TRUE) else 0
@@ -643,10 +649,11 @@ server <- function(input, output, session) {
     }
 
     fluidRow(
-      column(3, stat_box("Shots",        n_shots,                          VT_MAROON)),
-      column(3, stat_box("VT Goals",     n_goals,                          "#c0392b")),
-      column(3, stat_box("Hits",         n_hits,                           VT_ORANGE)),
-      column(3, stat_box("Faceoff Wins", paste0(n_fo_wins, " / ", n_faceoffs), "#2471a3"))
+      column(2, stat_box("Shots",        n_shots,                          VT_MAROON)),
+      column(2, stat_box("VT Goals",     n_goals,                          "#c0392b")),
+      column(2, stat_box("Takeaways",    n_takeaways,                      "#198754")),
+      column(2, stat_box("Giveaways",    n_giveaways,                      VT_ORANGE)),
+      column(2, stat_box("Faceoff Wins", paste0(n_fo_wins, " / ", n_faceoffs), "#2471a3"))
     )
   })
 
@@ -674,9 +681,9 @@ server <- function(input, output, session) {
               class    = "table-striped table-hover")
   }
 
-  output$table_faceoffs <- renderDT({ make_dt(summary_data$faceoffs) })
-  output$table_hits     <- renderDT({ make_dt(summary_data$hits) })
-  output$table_shots    <- renderDT({ make_dt(summary_data$shots) })
+  output$table_faceoffs  <- renderDT({ make_dt(summary_data$faceoffs) })
+  output$table_turnovers <- renderDT({ make_dt(summary_data$turnovers) })
+  output$table_shots     <- renderDT({ make_dt(summary_data$shots) })
   output$table_goals    <- renderDT({ make_dt(summary_data$goals) })
   output$table_on_ice   <- renderDT({ make_dt(summary_data$on_ice) })
 
@@ -687,13 +694,13 @@ server <- function(input, output, session) {
   # ============================================================
 
   analytics_data <- reactiveVal(list(
-    players  = data.frame(),
-    shots    = data.frame(),
-    goals    = data.frame(),
-    faceoffs = data.frame(),
-    hits     = data.frame(),
-    games    = data.frame(),
-    n_games  = 1L
+    players   = data.frame(),
+    shots     = data.frame(),
+    goals     = data.frame(),
+    faceoffs  = data.frame(),
+    turnovers = data.frame(),
+    games     = data.frame(),
+    n_games   = 1L
   ))
 
   load_analytics <- function() {
@@ -702,19 +709,19 @@ server <- function(input, output, session) {
                            select  = "id,jersey_num,full_name,position,active",
                            filters = c("active" = "eq.true"),
                            order   = "jersey_num.asc")
-      shots    <- sb_select("shots")
-      goals    <- sb_select("goals")
-      faceoffs <- sb_select("faceoffs")
-      hits     <- sb_select("hits")
-      games    <- sb_select("games", order = "game_date.asc")
+      shots     <- sb_select("shots")
+      goals     <- sb_select("goals")
+      faceoffs  <- sb_select("faceoffs")
+      turnovers <- sb_select("turnovers")
+      games     <- sb_select("games", order = "game_date.asc")
       analytics_data(list(
-        players  = players,
-        shots    = shots,
-        goals    = goals,
-        faceoffs = faceoffs,
-        hits     = hits,
-        games    = games,
-        n_games  = max(nrow(games), 1L)
+        players   = players,
+        shots     = shots,
+        goals     = goals,
+        faceoffs  = faceoffs,
+        turnovers = turnovers,
+        games     = games,
+        n_games   = max(nrow(games), 1L)
       ))
     }, error = function(e) NULL)
   }
@@ -753,12 +760,12 @@ server <- function(input, output, session) {
     d <- analytics_data()
     req(nrow(d$players) > 0)
     compute_player_stats(
-      players  = d$players,
-      shots    = d$shots,
-      goals    = d$goals,
-      faceoffs = d$faceoffs,
-      hits     = d$hits,
-      n_games  = d$n_games
+      players   = d$players,
+      shots     = d$shots,
+      goals     = d$goals,
+      faceoffs  = d$faceoffs,
+      turnovers = d$turnovers,
+      n_games   = d$n_games
     )
   })
 
@@ -838,8 +845,10 @@ server <- function(input, output, session) {
               pct("hd_pct")),
       pct_bar("Shots / Game",       paste0(p$shots_per_game),
               pct("shots_per_game")),
-      pct_bar("Hits / Game",        paste0(p$hits_per_game),
-              pct("hits_per_game")),
+      pct_bar("Takeaways / Game",   paste0(p$takeaways_per_game),
+              pct("takeaways_per_game")),
+      pct_bar("Giveaways / Game \u2193", paste0(p$giveaways_per_game),
+              100L - pct("giveaways_per_game")),
       if (!is.na(p$fo_pct))
         pct_bar("Faceoff Win %", paste0(p$fo_pct, "%  (", p$fo_total, " taken)"),
                 pct("fo_pct"))
@@ -873,8 +882,13 @@ server <- function(input, output, session) {
                  "Shots from ≤25 ft at angle ≤45°"),
       metric_row("avg xG per Shot", paste0(round(p$xg_per_shot, 3)),
                  "Shot quality: higher = more dangerous locations"),
+      metric_row("Takeaways", p$takeaways, "Puck recoveries from opponents"),
+      metric_row("Giveaways", p$giveaways, "Puck losses to opponents"),
+      metric_row("TA/GA Ratio",
+                 if (!is.na(p$ta_ga_ratio)) p$ta_ga_ratio else paste0(p$takeaways, "/0"),
+                 "Takeaways \u00f7 Giveaways — higher is better"),
       if (p$fo_total > 0)
-        metric_row("Faceoff W−L", paste0(p$fo_wins, "−", p$fo_total - p$fo_wins),
+        metric_row("Faceoff W\u2212L", paste0(p$fo_wins, "\u2212", p$fo_total - p$fo_wins),
                    paste0(p$fo_pct, "% win rate"))
     )
   })
