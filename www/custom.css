@@ -59,3 +59,22 @@
 .alert.rounded-0 {
   border-radius: 0 !important;
 }
+
+/* On Ice tab — large jersey number input boxes */
+.jersey-box {
+  width: 72px !important;
+  height: 72px !important;
+  font-size: 1.8rem !important;
+  font-weight: 800 !important;
+  text-align: center !important;
+  padding: 4px !important;
+  border: 2px solid #dee2e6 !important;
+  border-radius: 10px !important;
+  color: #861F41 !important;
+}
+
+.jersey-box:focus {
+  border-color: #861F41 !important;
+  box-shadow: 0 0 0 3px rgba(134,31,65,0.2) !important;
+  outline: none !important;
+}
