@@ -143,13 +143,8 @@ if (nrow(vt_shots) == 0) {
       `Goals`          = sum(result == "goal", na.rm = TRUE),
       `Shooting %`     = paste0(round(mean(result == "goal", na.rm=TRUE)*100,1),"%"),
       `Total xG`       = round(sum(xg, na.rm=TRUE), 2),
-<<<<<<< HEAD
-      `Avg xG/Shot`    = round(mean(xg, na.rm=TRUE), 3),
-      `Goals − xG`     = round(sum(result == "goal", na.rm=TRUE) -
-=======
       `SQ`    = round(mean(xg, na.rm=TRUE), 3),
       `GAE`     = round(sum(result == "goal", na.rm=TRUE) -
->>>>>>> main
                                 sum(xg, na.rm=TRUE), 2)
     ) |>
     gt() |>
@@ -192,24 +187,6 @@ if (nrow(vt_shots) == 0 || sum(!is.na(vt_shots$x_coord)) == 0) {
   cat("No shot location data yet.")
 } else {
   vt_shots |>
-<<<<<<< HEAD
-    filter(!is.na(x_coord)) |>
-    mutate(zone = classify_danger(x_coord, y_coord)) |>
-    group_by(zone) |>
-    summarise(
-      Shots  = n(),
-      Goals  = sum(result == "goal", na.rm = TRUE),
-      xG     = round(sum(xg, na.rm = TRUE), 2),
-      `Shot%`= paste0(round(Goals/Shots*100, 1), "%"),
-      .groups = "drop"
-    ) |>
-    arrange(match(zone, c("High Danger","Medium Danger","Low Danger"))) |>
-    gt() |>
-    tab_header(title = "Shots by Danger Zone",
-               subtitle = "High Danger = within 25 ft, angle ≤ 45°") |>
-    data_color(columns = xG,
-               palette = c("#f4cccc","#861F41"))
-=======
   filter(!is.na(x_coord)) |>
   mutate(zone = classify_danger(x_coord, y_coord)) |>
   group_by(zone) |>
@@ -226,8 +203,6 @@ if (nrow(vt_shots) == 0 || sum(!is.na(vt_shots$x_coord)) == 0) {
   tab_header(title = "Shots by Danger Zone") |>
   data_color(columns = xG,
              palette = c("#f4cccc","#861F41"))
->>>>>>> main
-}
 ```
 
 ## Faceoffs
@@ -271,53 +246,25 @@ if (nrow(player_stats) == 0) {
       S            = shots,
       `S%`         = shoot_pct,
       `xG`         = xg_total,
-<<<<<<< HEAD
-      `G−xG`       = g_minus_xg,
-      `xG/S`       = xg_per_shot,
-      `HD%`        = hd_pct,
-      Takeaways    = takeaways,
-      Giveaways    = giveaways,
-=======
       `GAE`        = g_minus_xg,
       `SQ`         = xg_per_shot,
       `HD%`        = hd_pct,
       TA    = takeaways,
       GA    = giveaways,
->>>>>>> main
       `FO%`        = fo_pct
     ) |>
     gt() |>
     tab_header(title = "VT Skater Stats") |>
-<<<<<<< HEAD
-    tab_spanner("Scoring",     c(G, A1, A2, PTS)) |>
-    tab_spanner("Shooting",    c(S, `S%`, xG, `G−xG`, `xG/S`, `HD%`)) |>
-    tab_spanner("Turnovers",   c(Takeaways, Giveaways)) |>
-    tab_spanner("Faceoffs",    c(`FO%`)) |>
-    fmt_number(columns = c(xG, `G−xG`, `xG/S`), decimals = 2) |>
-    fmt_missing(columns = everything(), missing_text = "—") |>
-    data_color(
-      columns = `G−xG`,
-      palette = c("#d62020","#ffffff","#1655a2"),
-=======
     fmt_number(columns = c(xG, GAE, SQ), decimals = 2) |>
     fmt_missing(columns = everything(), missing_text = "—") |>
     data_color(
       columns = `xG`,
       palette = c("#d62020","#ffffff","#228B22"),
->>>>>>> main
       domain  = c(-2, 2)
     ) |>
     tab_style(style = cell_text(weight = "bold"),
               locations = cells_column_labels()) |>
     cols_align(align = "center",
-<<<<<<< HEAD
-               columns = c(G, A1, A2, PTS, S, `S%`, xG, `G−xG`,
-                           `xG/S`, `HD%`, Takeaways, Giveaways, `FO%`))
-}
-```
-
-**Column key:** G = Goals, A1/A2 = Primary/Secondary Assists, S% = Shooting %, xG = Expected Goals, G−xG = Goals above expected (positive = outperforming), xG/S = Shot quality, HD% = High danger shot %, FO% = Faceoff win %
-=======
                columns = c(G, A1, A2, PTS, S, `S%`, xG, GAE,
                            SQ, `HD%`, TA, GA, `FO%`)) |>
     cols_width(
@@ -339,7 +286,6 @@ if (nrow(player_stats) == 0) {
 ```
 
 **Column key:** G = Goals, A1/A2 = Primary/Secondary Assists, S% = Shooting %, xG = Expected Goals, GAE = Goals above expected, SQ = Average shot quality (xG/Shot), HD% = High danger shot %, TA = Takeaways, GA = Giveaways, FO% = Faceoff win %
->>>>>>> main
 
 ## Faceoff Leaderboard
 
@@ -357,12 +303,7 @@ if (nrow(faceoffs) == 0) {
     arrange(desc(`Win %`)) |>
     select(Player, Total, Wins, `Win %`) |>
     gt() |>
-<<<<<<< HEAD
-    tab_header(title = "Faceoff Leaders", subtitle = "(min. 3 taken)") |>
-    data_color(columns = `Win %`, palette = c("#f4cccc","#d4edda"))
-=======
     tab_header(title = "Faceoff Leaders", subtitle = "(min. 3 taken)")
->>>>>>> main
 }
 ```
 
@@ -388,11 +329,7 @@ if (nrow(turnovers) == 0) {
     arrange(desc(Takeaways)) |>
     gt() |>
     tab_header(title = "Turnover Leaders") |>
-<<<<<<< HEAD
-    data_color(columns = Takeaways, palette = c("#fff3cd","#198754"))
-=======
     data_color(columns = Takeaways, palette = c("#d62020","#ffffff","#228B22"))
->>>>>>> main
 }
 ```
 
@@ -409,22 +346,6 @@ loc_shots <- vt_shots[!is.na(vt_shots$x_coord), ]
 if (nrow(loc_shots) == 0) cat("No shot location data yet.") else draw_rink(loc_shots)
 ```
 
-<<<<<<< HEAD
-## High Danger Zone Shots
-
-```{r shot-map-hd}
-#| echo: false
-#| fig-height: 5
-if (nrow(loc_shots) > 0) {
-  hd <- loc_shots |>
-    mutate(zone = classify_danger(x_coord, y_coord)) |>
-    filter(zone == "High Danger")
-  if (nrow(hd) > 0) draw_rink(hd) else cat("No high-danger shots recorded.")
-}
-```
-
-=======
->>>>>>> main
 ## Shots by Period
 
 ```{r shot-map-period}
@@ -463,15 +384,9 @@ if (nrow(player_stats) == 0 || sum(player_stats$xg_total) == 0) {
     geom_col(aes(y = goals),    fill = "#E5751F", alpha = 0.9,
              width = 0.4) +
     coord_flip() +
-<<<<<<< HEAD
-    labs(title = "xG vs Actual Goals by Player",
-         subtitle = "Maroon bars = xG total  |  Orange bars = actual goals",
-         x = NULL, y = "Value") +
-=======
     labs(title = "xG vs Actual Goals by Player (Goals Above Expected)",
          subtitle = "Maroon bars = xG total  |  Orange bars = actual goals",
          x = NULL, y = "Goals") +
->>>>>>> main
     theme_minimal(base_size = 12) +
     theme(panel.grid.major.y = element_blank())
 }
