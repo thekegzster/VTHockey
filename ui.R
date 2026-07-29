@@ -37,7 +37,7 @@ ui <- page_navbar(
         card_header("Who are you?"),
         card_body(
           textInput("collector_name", "Your name",
-                    placeholder = "e.g. Alex Smith",
+                    placeholder = "e.g. Matthew Schaefer",
                     width = "100%"),
           helpText("This is recorded with every entry you submit.")
         )
@@ -127,17 +127,30 @@ ui <- page_navbar(
                          choices = NULL, width = "100%",
                          options = list(placeholder = "Start typing name or #...")),
           fluidRow(
-            column(6,
-              selectInput("fo_result", "Result",
-                          choices = c("Win" = "win", "Loss" = "loss"),
-                          width = "100%")
+            column(
+              6,
+              radioButtons(
+                "fo_result",
+                "Result",
+                choices = c(
+                  "Win" = "win",
+                  "Loss" = "loss"
+                ),
+                inline = TRUE
+              )
             ),
-            column(6,
-              selectInput("fo_zone", "Zone",
-                          choices = c("Offensive Zone" = "offensive",
-                                      "Defensive Zone" = "defensive",
-                                      "Neutral Zone"   = "neutral"),
-                          width = "100%")
+            column(
+              6,
+              selectInput(
+                "fo_zone",
+                "Zone",
+                choices = c(
+                  "Offensive Zone" = "offensive",
+                  "Defensive Zone" = "defensive",
+                  "Neutral Zone" = "neutral"
+                ),
+                width = "100%"
+              )
             )
           ),
           div(
@@ -189,18 +202,30 @@ ui <- page_navbar(
                          choices = NULL, width = "100%",
                          options = list(placeholder = "Start typing name or #...")),
           fluidRow(
-            column(6,
-              selectInput("to_type", "Type",
-                          choices = c("Takeaway (VT gains puck)"  = "takeaway",
-                                      "Giveaway (VT loses puck)"  = "giveaway"),
-                          width = "100%")
+            column(
+              6,
+              radioButtons(
+                "to_type",
+                "Type",
+                choices = c(
+                  "Takeaway" = "takeaway",
+                  "Giveaway" = "giveaway"
+                ),
+                inline = FALSE
+              )
             ),
-            column(6,
-              selectInput("to_zone", "Zone",
-                          choices = c("Offensive zone" = "offensive",
-                                      "Neutral zone"   = "neutral",
-                                      "Defensive zone" = "defensive"),
-                          width = "100%")
+            column(
+              6,
+              radioButtons(
+                "to_zone",
+                "Zone",
+                choices = c(
+                  "Offensive" = "offensive",
+                  "Neutral" = "neutral",
+                  "Defensive" = "defensive"
+                ),
+                inline = FALSE
+              )
             )
           ),
           div(
@@ -250,23 +275,39 @@ ui <- page_navbar(
                   textInput("shot_time", "Time (MM:SS)", placeholder = "14:23", width = "100%")
                 )
               ),
-              selectInput("shot_team", "Team shooting",
-                          choices = c("VT" = "VT", "Opponent" = "opponent"),
-                          width = "100%"),
+              radioButtons(
+                "shot_team",
+                "Team shooting",
+                choices = c(
+                  "VT" = "VT",
+                  "Opponent" = "opponent"
+                ),
+                inline = TRUE
+              ),
               conditionalPanel(
                 condition = "input.shot_team == 'VT'",
                 selectizeInput("shot_player", "VT Player",
                                choices = NULL, width = "100%",
                                options = list(placeholder = "Start typing name or #..."))
               ),
-              selectInput("shot_type", "Shot type",
-                          choices = SHOT_TYPE_CHOICES, width = "100%"),
-              selectInput("shot_result", "Result",
-                          choices = c("On goal (save)"  = "save",
-                                      "Goal"            = "goal",
-                                      "Missed net"      = "missed",
-                                      "Blocked"         = "blocked"),
-                          width = "100%"),
+              radioButtons(
+                "shot_type",
+                "Shot type",
+                choices = SHOT_TYPE_CHOICES,
+                inline = FALSE
+              ),
+              
+              radioButtons(
+                "shot_result",
+                "Result",
+                choices = c(
+                  "On goal (save)" = "save",
+                  "Goal" = "goal",
+                  "Missed net" = "missed",
+                  "Blocked" = "blocked"
+                ),
+                inline = FALSE
+              ),
 
               # --- Goal details: only shown when result == "goal" ---
               conditionalPanel(
@@ -373,7 +414,37 @@ ui <- page_navbar(
         ),
         card_body(
 
-          # 5 large jersey number boxes
+          # Goalie section
+          div(
+            class = "text-center mb-4",
+            tags$h6(
+              "Goalie",
+              class = "fw-bold mb-2",
+              style = paste0("color:", VT_MAROON, ";")
+            ),
+            div(
+              class = "d-flex justify-content-center",
+              tags$input(
+                id          = "ice_goalie",
+                type        = "text",
+                inputmode   = "numeric",
+                maxlength   = "2",
+                placeholder = "#",
+                class       = "form-control jersey-box goalie-box",
+                autocomplete = "off"
+              )
+            ),
+            uiOutput("ice_goalie_lbl")
+          ),
+          
+          # Skaters section
+          tags$h6(
+            "Skaters",
+            class = "fw-bold text-center mb-2",
+            style = paste0("color:", VT_MAROON, ";")
+          ),
+          
+          # 5 skater jersey number boxes
           div(
             class = "d-flex gap-3 justify-content-center mb-1",
             lapply(1:5, function(i) {
