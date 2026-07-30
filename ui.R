@@ -573,10 +573,17 @@ ui <- page_navbar(
 
       # ---- Player selector ----
       fluidRow(
-        column(4,
-          selectizeInput("player_select", "Select player",
-                         choices  = NULL, width = "100%",
-                         options  = list(placeholder = "Choose a player..."))
+        column(3,
+               selectInput("player_type", "Player Type",
+                           choices = c("Skater", "Goalie"),
+                           selected = "Skater")
+        ),
+        
+        column(3,
+               selectizeInput("player_select", "Select player",
+                              choices  = NULL,
+                              width = "100%",
+                              options = list(placeholder = "Choose a player..."))
         ),
         column(8,
           uiOutput("player_header")
@@ -588,51 +595,26 @@ ui <- page_navbar(
       uiOutput("player_session_warn"),
 
       # ---- Stat boxes row ----
-      uiOutput("player_stat_boxes"),
+      uiOutput("player_stat_boxes_dynamic"),
 
       br(),
 
       # ---- Percentile chart + shot map ----
-      fluidRow(
-        column(5,
-          card(
-            card_header(
-              tagList(
-                "Percentile Rankings",
-                tags$small(class = "text-muted ms-2",
-                           "(vs VT teammates, season totals)")
-              )
-            ),
-            card_body(uiOutput("player_percentiles"))
-          )
-        ),
-        column(7,
-          card(
-            card_header("Personal Shot Map"),
-            card_body(
-              plotOutput("player_shot_map", height = "360px")
-            )
-          )
-        )
-      ),
-
-      br(),
+      uiOutput("player_percentile_section"),
 
       # ---- Advanced analytics cards ----
       fluidRow(
         column(6,
-          card(
-            card_header("Advanced Metrics"),
-            card_body(uiOutput("player_advanced"))
-          )
+               card(
+                 card_header("Advanced Metrics"),
+                 card_body(uiOutput("advanced_metrics_dynamic"))
+               )
         ),
         column(6,
-          card(
-            card_header("Game-by-Game Trend"),
-            card_body(
-              plotOutput("player_trend", height = "280px")
-            )
-          )
+               card(
+                 card_header("Game-by-Game Trend"),
+                 card_body(uiOutput("trend_dynamic"))
+               )
         )
       ),
 

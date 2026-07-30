@@ -149,6 +149,58 @@ compute_plus_minus <- function(on_ice, shots) {
 # Returns one row per skater with all basic + advanced stats
 # ============================================================
 
+## Computing Goalie Stats
+compute_goalie_stats <- function(shots) {
+  
+  if (nrow(shots) == 0 || !"goalie_id" %in% names(shots)) {
+    return(data.frame())
+  }
+  
+  goalie_shots <- shots |>
+    dplyr::filter(team != "VT") |>
+    dplyr::filter(!is.na(goalie_id)) |>
+    dplyr::mutate(
+      danger = mapply(classify_danger, x_coord, y_coord),
+      saved = result == "save",
+      goal_allowed = result == "goal"
+    )
+  
+  goalie_shots |>
+    dplyr::group_by(goalie_id) |>
+    dplyr::summarise(
+      
+      shots_against = n(),
+      saves = sum(saved),
+      goals_against = sum(goal_allowed),
+      
+      high_danger_saves = sum(saved & danger == "High Danger"),
+      medium_danger_saves = sum(saved & danger == "Medium Danger"),
+      low_danger_saves = sum(saved & danger == "Low Danger"),
+      
+      high_danger_shots = sum(danger == "High Danger"),
+      medium_danger_shots = sum(danger == "Medium Danger"),
+      low_danger_shots = sum(danger == "Low Danger"),
+      
+      save_pct = ifelse(shots_against > 0, 
+                        round(saves / shots_against * 100, 1), NA_real_),
+      
+      hd_save_pct = ifelse(high_danger_shots > 0,
+                           round(high_danger_saves / high_danger_shots * 100, 1),
+                           NA_real_),
+      
+      md_save_pct = ifelse(medium_danger_shots > 0,
+                           round(medium_danger_saves / medium_danger_shots * 100, 1),
+                           NA_real_),
+      
+      ld_save_pct = ifelse(low_danger_shots > 0,
+                           round(low_danger_saves / low_danger_shots * 100, 1),
+                           NA_real_),
+      
+      .groups="drop"
+    )
+}
+
+
 compute_player_stats <- function(players, shots, goals, faceoffs, turnovers,
                                  on_ice = data.frame(), n_games = 1) {
 

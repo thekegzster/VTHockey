@@ -33,6 +33,7 @@ server <- function(input, output, session) {
 
     # On Ice tab: current line (jersey numbers as strings) + change log
     current_jerseys = character(0),
+    goalie_jersey   = NULL,
     line_log        = list()
   )
 
@@ -124,6 +125,7 @@ server <- function(input, output, session) {
     rv$last_shot_id     <- NULL
     rv$last_goal_id     <- NULL
     rv$current_jerseys  <- character(0)
+    rv$goalie_jersey    <- NULL
     rv$line_log         <- list()
     rv$pending_shot_x   <- NULL
     rv$pending_shot_y   <- NULL
@@ -228,20 +230,40 @@ server <- function(input, output, session) {
       })
     })
   })
+  
+  # Render goalie name label
+  output$ice_goalie_lbl <- renderUI({
+    val <- input$ice_goalie
+    nm  <- jersey_to_name(val)
+    
+    if (nchar(nm) == 0) {
+      div(style = "height:18px; font-size:0.75rem; color:#ccc;", "–")
+    } else {
+      last <- gsub("^#\\d+\\s+", "", nm)
+      div(style = paste0("font-size:0.75rem; font-weight:700;",
+                         " color:", VT_MAROON, "; margin-top:2px;"),
+          last)
+    }
+  })
 
   # Set Line button — store jersey numbers in rv$current_jerseys
   observeEvent(input$btn_set_line, {
     req(rv$setup_done)
+    
+    goalie <- trimws(as.character(input$ice_goalie %||% ""))
+    
     jerseys <- vapply(1:5, function(i) {
       trimws(as.character(input[[paste0("ice_", i)]] %||% ""))
     }, character(1))
     jerseys <- jerseys[nchar(jerseys) > 0]
 
-    if (length(jerseys) == 0) {
-      notify_err("Enter at least one jersey number."); return()
+    if (length(jerseys) == 0 && nchar(goalie) == 0) {
+      notify_err("Enter at least one player or goalie.")
+      return()
     }
-
+    
     rv$current_jerseys <- jerseys
+    rv$goalie_jersey   <- goalie
 
     labels <- vapply(jerseys, function(j) {
       nm <- jersey_to_name(j)
@@ -256,7 +278,8 @@ server <- function(input, output, session) {
 
   # Current lineup banner
   output$on_ice_banner <- renderUI({
-    jerseys <- rv$current_jerseys
+    jerseys <- c(rv$goalie_jersey, rv$current_jerseys)
+    jerseys <- jerseys[nchar(jerseys) > 0]
     if (length(jerseys) == 0) {
       return(div(class = "alert alert-warning mb-0",
                  icon("triangle-exclamation"),
@@ -493,6 +516,11 @@ server <- function(input, output, session) {
       period         = input$shot_period,
       game_time      = trimws(input$shot_time),
       player_id      = if (is_vt) as.integer(input$shot_player) else NULL,
+      goalie_id      = if (!is.null(rv$goalie_jersey)) {
+        jersey_to_id(rv$goalie_jersey)
+      } else {
+        NULL
+      },
       shot_type      = input$shot_type,
       result         = input$shot_result,
       team           = input$shot_team,
@@ -588,7 +616,8 @@ server <- function(input, output, session) {
   # AUTO-LOG ON-ICE PLAYERS from current line (called per shot)
   # ----------------------------------------------------------
   log_on_ice_for_shot <- function(shot_id) {
-    jerseys <- rv$current_jerseys
+    jerseys <- c(rv$goalie_jersey, rv$current_jerseys)
+    jerseys <- jerseys[nchar(jerseys) > 0]
     if (length(jerseys) == 0) return()
     for (j in jerseys) {
       pid <- jersey_to_id(j)
@@ -753,6 +782,7 @@ server <- function(input, output, session) {
                            filters = c("active" = "eq.true"),
                            order   = "jersey_num.asc")
       shots     <- sb_select("shots")
+      print(names(shots))
       goals     <- sb_select("goals")
       faceoffs  <- sb_select("faceoffs")
       turnovers <- sb_select("turnovers")
@@ -782,13 +812,31 @@ server <- function(input, output, session) {
   observe({
     d <- analytics_data()
     req(nrow(d$players) > 0)
+    
+    if (input$player_type == "Goalie") {
+      
+      players <- d$players |>
+        dplyr::filter(position == "G")
+      
+    } else {
+      
+      players <- d$players |>
+        dplyr::filter(position != "G")
+      
+    }
+    
     choices <- setNames(
-      as.character(d$players$id),
-      paste0("#", d$players$jersey_num, "  ", d$players$full_name,
-             " (", d$players$position, ")")
+      as.character(players$id),
+      paste0("#", players$jersey_num,
+             "  ", players$full_name)
     )
-    choices <- choices[!grepl("\\(G\\)", names(choices))]
-    updateSelectizeInput(session, "player_select", choices = choices)
+    
+    updateSelectizeInput(
+      session,
+      "player_select",
+      choices = choices,
+      server = TRUE
+    )
   })
 
   # Soft status message (non-blocking)
@@ -802,24 +850,56 @@ server <- function(input, output, session) {
 
   # Compute full team stats — pure computation from cache, no Supabase calls
   team_stats <- reactive({
+    
     d <- analytics_data()
     req(nrow(d$players) > 0)
-    compute_player_stats(
-      players   = d$players,
-      shots     = d$shots,
-      goals     = d$goals,
-      faceoffs  = d$faceoffs,
-      turnovers = d$turnovers,
-      on_ice    = d$on_ice,
-      n_games   = d$n_games
-    )
+    
+    if (input$player_type == "Goalie") {
+      
+      goalie_stats <- compute_goalie_stats(
+        shots = d$shots
+      )
+      
+      goalie_stats |>
+        dplyr::left_join(
+          d$players |>
+            dplyr::select(
+              id,
+              jersey_num,
+              full_name,
+              position
+            ),
+          by = c("goalie_id" = "id")
+        ) |>
+        dplyr::mutate(
+          player_id = goalie_id,
+          games_played = d$n_games
+        )
+      
+    } else {
+      
+      compute_player_stats(
+        players   = d$players,
+        shots     = d$shots,
+        goals     = d$goals,
+        faceoffs  = d$faceoffs,
+        turnovers = d$turnovers,
+        on_ice    = d$on_ice,
+        n_games   = d$n_games
+      )
+    }
   })
 
   # Selected player's row
   selected_player_stats <- reactive({
-    req(input$player_select, nrow(team_stats()) > 0)
+    
+    req(input$player_select)
+    req(nrow(team_stats()) > 0)
+    
     team_stats() |>
-      dplyr::filter(player_id == as.integer(input$player_select))
+      dplyr::filter(
+        player_id == as.integer(input$player_select)
+      )
   })
 
   # ---- Player header banner ----
@@ -842,6 +922,71 @@ server <- function(input, output, session) {
     )
   })
 
+  output$player_stat_boxes_dynamic <- renderUI({
+    
+    req(input$player_select)
+    
+    if(input$player_type == "Goalie") {
+      uiOutput("goalie_stat_boxes")
+    } else {
+      uiOutput("player_stat_boxes")
+    }
+    
+  })
+  
+  # Goalie Stat boxes
+  output$goalie_stat_boxes <- renderUI({
+    
+    req(nrow(selected_player_stats()) > 0)
+    
+    g <- selected_player_stats()
+    
+    box <- function(val, lbl, color = VT_MAROON) {
+      column(3,
+             div(class = "card text-center",
+                 style = paste0("border-top:4px solid ", color, ";"),
+                 div(class = "card-body py-2",
+                     h3(val,
+                        style = paste0(
+                          "color:", color,
+                          "; font-weight:700; margin:0;"
+                        )),
+                     p(lbl,
+                       class = "mb-0 text-muted",
+                       style = "font-size:0.8rem; font-weight:600;")
+                 ))
+      )
+    }
+    
+    tagList(
+      
+      fluidRow(
+        box(g$games_played, "Games", VT_MAROON),
+        box(g$shots_against, "Shots Against", "#2471a3"),
+        box(g$saves, "Saves", "#117a65"),
+        box(g$goals_against, "Goals Against", "#c0392b")
+      ),
+      
+      fluidRow(
+        box(
+          paste0(g$save_pct, "%"),
+          "Save %",
+          "#7d3c98"
+        ),
+        box(
+          paste0(g$hd_save_pct, "%"),
+          "High Danger Save %",
+          "#d35400"
+        ),
+        box(
+          paste0(g$md_save_pct, "%"),
+          "Medium Danger Save %",
+          "#2980b9"
+        )
+      )
+    )
+  })
+  
   # ---- Stat boxes ----
   output$player_stat_boxes <- renderUI({
     req(nrow(selected_player_stats()) > 0)
@@ -889,6 +1034,55 @@ server <- function(input, output, session) {
     )
   })
 
+  # Hiding percentile bar stuff
+  output$player_percentile_section <- renderUI({
+    
+    if(input$player_type == "Goalie") {
+      
+      return(
+        fluidRow(
+          column(12,
+                 card(
+                   card_header("Personal Shot Map"),
+                   card_body(
+                     plotOutput("player_shot_map", height = "360px")
+                   )
+                 )
+          )
+        )
+      )
+      
+    } else {
+      
+      return(
+        fluidRow(
+          column(5,
+                 card(
+                   card_header(
+                     tagList(
+                       "Percentile Rankings",
+                       tags$small(class = "text-muted ms-2",
+                                  "(vs VT teammates, season totals)")
+                     )
+                   ),
+                   card_body(uiOutput("player_percentiles"))
+                 )
+          ),
+          column(7,
+                 card(
+                   card_header("Personal Shot Map"),
+                   card_body(
+                     plotOutput("player_shot_map", height = "360px")
+                   )
+                 )
+          )
+        )
+      )
+      
+    }
+    
+  })
+  
   # ---- Percentile bars ----
   output$player_percentiles <- renderUI({
     req(nrow(selected_player_stats()) > 0, nrow(team_stats()) >= 1)
@@ -929,6 +1123,16 @@ server <- function(input, output, session) {
   })
 
   # ---- Advanced metrics card ----
+  output$advanced_metrics_dynamic <- renderUI({
+    req(input$player_select)
+    if (input$player_type == "Goalie") {
+      uiOutput("goalie_advanced")
+    } else {
+      uiOutput("player_advanced")
+    }
+  })
+  
+  
   output$player_advanced <- renderUI({
     req(nrow(selected_player_stats()) > 0)
     p <- selected_player_stats()
@@ -971,6 +1175,38 @@ server <- function(input, output, session) {
                    paste0(p$fo_pct, "% win rate"))
     )
   })
+  
+  output$goalie_advanced <- renderUI({
+    req(nrow(selected_player_stats()) > 0)
+    g <- selected_player_stats()
+    
+    metric_row <- function(label, value, note = NULL) {
+      div(class = "d-flex justify-content-between border-bottom py-2",
+          div(tags$b(label),
+              if (!is.null(note)) tags$small(class = "text-muted d-block", note)),
+          div(style = "font-size:1.1rem; font-weight:700;", value)
+      )
+    }
+    
+    pct_str <- function(x) if (is.na(x) || is.nan(x)) "N/A" else paste0(x, "%")
+    
+    tagList(
+      metric_row("Games Played", g$games_played),
+      metric_row("Shots Against", g$shots_against),
+      metric_row("Saves", g$saves),
+      metric_row("Goals Against", g$goals_against),
+      metric_row("Save %", pct_str(g$save_pct)),
+      metric_row("High Danger Shots", g$high_danger_shots,
+                 paste0(g$high_danger_saves, " saved")),
+      metric_row("High Danger Save %", pct_str(g$hd_save_pct)),
+      metric_row("Medium Danger Shots", g$medium_danger_shots,
+                 paste0(g$medium_danger_saves, " saved")),
+      metric_row("Medium Danger Save %", pct_str(g$md_save_pct)),
+      metric_row("Low Danger Shots", g$low_danger_shots,
+                 paste0(g$low_danger_saves, " saved")),
+      metric_row("Low Danger Save %", pct_str(g$ld_save_pct))
+    )
+  })
 
   # ---- Personal shot map ----
   output$player_shot_map <- renderPlot({
@@ -980,8 +1216,21 @@ server <- function(input, output, session) {
     player_shots <- tryCatch({
       s <- d$shots
       if (nrow(s) == 0 || !"player_id" %in% names(s)) return(draw_rink())
-      s <- s[s$player_id == as.integer(input$player_select) &
-               !is.na(s$x_coord), ]
+      if(input$player_type == "Goalie") {
+        
+        s <- s[
+          s$goalie_id == as.integer(input$player_select) &
+            !is.na(s$x_coord),
+        ]
+        
+      } else {
+        
+        s <- s[
+          s$player_id == as.integer(input$player_select) &
+            !is.na(s$x_coord),
+        ]
+        
+      }
       if (nrow(s) == 0) return(draw_rink())
       s$result <- ifelse(is.na(s$result), "save", s$result)
       s
@@ -995,6 +1244,15 @@ server <- function(input, output, session) {
   })
 
   # ---- Game-by-game trend chart ----
+  output$trend_dynamic <- renderUI({
+    req(input$player_select)
+    if (input$player_type == "Goalie") {
+      plotOutput("goalie_trend", height = "280px")
+    } else {
+      plotOutput("player_trend", height = "280px")
+    }
+  })
+  
   output$player_trend <- renderPlot({
     req(input$player_select)
     d        <- analytics_data()
@@ -1059,6 +1317,86 @@ server <- function(input, output, session) {
       theme(
         legend.position  = "top",
         axis.text.x      = element_text(angle = 30, hjust = 1),
+        panel.grid.major.x = element_blank()
+      )
+  })
+  
+  
+  # ---- Goalie game-by-game trend: Save % and GSAx per game ----
+  output$goalie_trend <- renderPlot({
+    req(input$player_select)
+    d        <- analytics_data()
+    gid      <- as.integer(input$player_select)
+    games_df <- d$games
+    
+    if (nrow(games_df) == 0) {
+      plot.new(); text(0.5, 0.5, "No game data yet", cex = 1.2); return()
+    }
+    
+    shots <- d$shots
+    has_faced <- nrow(shots) > 0 && "goalie_id" %in% names(shots)
+    
+    faced <- if (has_faced) {
+      shots[!is.na(shots$goalie_id) & shots$goalie_id == gid, ]
+    } else {
+      shots[0, ]
+    }
+    
+    if (nrow(faced) == 0) {
+      plot.new(); text(0.5, 0.5, "No shots faced by this goalie yet", cex = 1.1); return()
+    }
+    
+    # xG against — mirror x-coord onto the goalie's own net, same logic as compute_plus_minus
+    st_col <- if ("shot_type" %in% names(faced)) faced$shot_type else rep("wrist", nrow(faced))
+    faced$xga <- mapply(function(x, y, st) {
+      if (is.na(x) || is.na(y)) return(0)
+      calc_xg(200 - x, y, st)
+    }, faced$x_coord, faced$y_coord, st_col)
+    
+    per_game <- faced |>
+      dplyr::group_by(game_id) |>
+      dplyr::summarise(
+        shots_against = dplyr::n(),
+        saves         = sum(result == "save",  na.rm = TRUE),
+        goals_against = sum(result == "goal",  na.rm = TRUE),
+        xga           = round(sum(xga, na.rm = TRUE), 2),
+        .groups = "drop"
+      ) |>
+      dplyr::mutate(
+        save_pct = ifelse(shots_against > 0, round(saves / shots_against * 100, 1), NA_real_),
+        gsax     = round(xga - goals_against, 2)   # + = saved more than expected
+      )
+    
+    trend <- games_df |>
+      dplyr::select(game_id = id, game_date, opponent) |>
+      dplyr::inner_join(per_game, by = "game_id") |>
+      dplyr::mutate(label = substr(opponent, 1, 10)) |>
+      dplyr::arrange(game_date)
+    
+    if (nrow(trend) == 0) {
+      plot.new(); text(0.5, 0.5, "No shots faced by this goalie yet", cex = 1.1); return()
+    }
+    
+    # Scale GSAx onto the same axis as save % so both bars are readable together
+    scale_factor <- 10
+    trend$gsax_scaled <- trend$gsax * scale_factor
+    
+    ggplot(trend, aes(x = label)) +
+      geom_col(aes(y = save_pct, fill = "Save %"), width = 0.4,
+               position = position_nudge(x = -0.22)) +
+      geom_col(aes(y = gsax_scaled, fill = "GSAx"), width = 0.4,
+               position = position_nudge(x = 0.22)) +
+      scale_fill_manual(values = c("Save %" = VT_MAROON, "GSAx" = VT_ORANGE),
+                        name = NULL) +
+      scale_y_continuous(
+        name = "Save %",
+        sec.axis = sec_axis(~ . / scale_factor, name = "GSAx (Goals Saved Above Expected)")
+      ) +
+      labs(x = "Opponent") +
+      theme_minimal(base_size = 12) +
+      theme(
+        legend.position    = "top",
+        axis.text.x        = element_text(angle = 30, hjust = 1),
         panel.grid.major.x = element_blank()
       )
   })
