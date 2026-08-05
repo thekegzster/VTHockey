@@ -650,6 +650,26 @@ server <- function(input, output, session) {
   safe_df <- function(x) {
     if (is.null(x) || !is.data.frame(x)) data.frame() else x
   }
+  
+  # Filters a summary data frame down to one period, or passes it through
+  # unfiltered when "All Periods" is selected. Used by every Summary tab output.
+  filter_by_period <- function(df) {
+    if (is.null(input$summary_period_filter) || input$summary_period_filter == "all") return(df)
+    if (is.null(df) || nrow(df) == 0 || !"period" %in% names(df)) return(df[0, ])
+    df[df$period == input$summary_period_filter, ]
+  }
+  
+  # Single reactive every Summary output reads from, so the period filter
+  # only needs to be applied once per table, not duplicated in every output.
+  summary_filtered <- reactive({
+    list(
+      faceoffs  = filter_by_period(safe_df(summary_data$faceoffs)),
+      turnovers = filter_by_period(safe_df(summary_data$turnovers)),
+      shots     = filter_by_period(safe_df(summary_data$shots)),
+      goals     = filter_by_period(safe_df(summary_data$goals)),
+      on_ice    = filter_by_period(safe_df(summary_data$on_ice))
+    )
+  })
 
   # Shared fetch function used by auto-refresh, manual button, and on-setup trigger
   do_refresh_summary <- function(silent = FALSE) {
@@ -683,45 +703,172 @@ server <- function(input, output, session) {
       notify_err("Could not refresh summary."))
   })
 
-  output$summary_value_boxes <- renderUI({
-    shots_df     <- safe_df(summary_data$shots)
-    goals_df     <- safe_df(summary_data$goals)
-    turnovers_df <- safe_df(summary_data$turnovers)
-    faceoffs_df  <- safe_df(summary_data$faceoffs)
-
-    n_shots     <- nrow(shots_df)
-    n_goals     <- if (nrow(goals_df) > 0 && "team" %in% names(goals_df))
+  # ----------------------------------------------------------
+  # SCOREBOARD (top of Summary tab)
+  # ----------------------------------------------------------
+  output$summary_scoreboard <- renderUI({
+    req(rv$game_id)
+    
+    games_df <- analytics_data()$games
+    game_row <- if (nrow(games_df) > 0) games_df[games_df$id == rv$game_id, ] else data.frame()
+    
+    goals_df  <- safe_df(summary_data$goals)
+    vt_score  <- if (nrow(goals_df) > 0 && "team" %in% names(goals_df))
       sum(goals_df$team == "VT", na.rm = TRUE) else 0
-    n_takeaways <- if (nrow(turnovers_df) > 0 && "type" %in% names(turnovers_df))
+    opp_score <- if (nrow(goals_df) > 0 && "team" %in% names(goals_df))
+      sum(goals_df$team != "VT" & !is.na(goals_df$team), na.rm = TRUE) else 0
+    
+    opponent_name <- if (nrow(game_row) > 0) game_row$opponent else "Opponent"
+    has_logo <- nrow(game_row) > 0 && "opponent_logo_url" %in% names(game_row) &&
+      !is.na(game_row$opponent_logo_url) &&
+      nchar(trimws(as.character(game_row$opponent_logo_url))) > 0
+    initials <- substring(gsub("[^A-Za-z]", "", opponent_name), 1, 3)
+    
+    vt_logo <- tags$img(src = "vt_logo.png", height = "76px",
+                        style = "object-fit:contain; filter:drop-shadow(0 2px 4px rgba(0,0,0,0.3));",
+                        onerror = paste0(
+                          "this.outerHTML='<div style=\"width:76px;height:76px;border-radius:50%;",
+                          "background:white;color:", VT_MAROON, ";display:flex;align-items:center;",
+                          "justify-content:center;font-weight:800;font-size:1.4rem;",
+                          "box-shadow:0 2px 8px rgba(0,0,0,0.25);\">VT</div>'"))
+    
+    opp_logo <- if (has_logo) {
+      tags$img(src = game_row$opponent_logo_url, height = "76px",
+               style = "object-fit:contain; filter:drop-shadow(0 2px 4px rgba(0,0,0,0.3));",
+               onerror = paste0(
+                 "this.outerHTML='<div style=\"width:76px;height:76px;border-radius:50%;",
+                 "background:#2c2c2c;color:white;display:flex;align-items:center;",
+                 "justify-content:center;font-weight:800;font-size:1.4rem;",
+                 "box-shadow:0 2px 8px rgba(0,0,0,0.25);\">", initials, "</div>'"))
+    } else {
+      div(style = paste0("width:76px; height:76px; border-radius:50%; background:#2c2c2c;",
+                         " color:white; display:flex; align-items:center; justify-content:center;",
+                         " font-weight:800; font-size:1.4rem;",
+                         " box-shadow:0 2px 8px rgba(0,0,0,0.25);"), initials)
+    }
+    
+    # Highlight whichever side is leading (or neither, if tied)
+    vt_leading  <- vt_score > opp_score
+    opp_leading <- opp_score > vt_score
+    vt_score_col  <- if (vt_leading) "#ffffff" else "rgba(255,255,255,0.55)"
+    opp_score_col <- if (opp_leading) "#ffffff" else "rgba(255,255,255,0.55)"
+    
+    div(
+      class = "mb-0",
+      style = paste0(
+        "background:linear-gradient(135deg, ", VT_MAROON, " 0%, #5c1530 100%);",
+        " border-radius:14px; box-shadow:0 8px 24px rgba(134,31,65,0.35);",
+        " padding:28px 32px; position:relative; overflow:hidden;"
+      ),
+      # subtle orange accent stripe across the top
+      div(style = paste0("position:absolute; top:0; left:0; right:0; height:5px;",
+                         " background:", VT_ORANGE, ";")),
+      
+      div(class = "d-flex align-items-center justify-content-center", style = "gap:3rem;",
+          div(class = "text-center", vt_logo,
+              tags$p("VIRGINIA TECH", class = "mt-2 mb-0",
+                     style = "color:white; font-weight:800; font-size:0.85rem; letter-spacing:1.5px;")
+          ),
+          
+          div(class = "text-center", style = "min-width:180px;",
+              div(class = "d-flex align-items-center justify-content-center",
+                  style = "gap:14px;",
+                  tags$span(vt_score, style = paste0(
+                    "font-size:4rem; font-weight:900; line-height:1;",
+                    " color:", vt_score_col, "; text-shadow:0 2px 6px rgba(0,0,0,0.3);")),
+                  tags$span("\u2013", style = paste0(
+                    "font-size:2.5rem; font-weight:300; color:", VT_ORANGE, ";")),
+                  tags$span(opp_score, style = paste0(
+                    "font-size:4rem; font-weight:900; line-height:1;",
+                    " color:", opp_score_col, "; text-shadow:0 2px 6px rgba(0,0,0,0.3);"))
+              )
+          ),
+          
+          div(class = "text-center", opp_logo,
+              tags$p(toupper(opponent_name), class = "mt-2 mb-0",
+                     style = "color:white; font-weight:800; font-size:0.85rem; letter-spacing:1.5px;")
+          )
+      )
+    )
+  })
+  
+  # ----------------------------------------------------------
+  # TEAM STATS (side card, replaces Goal Log)
+  # ----------------------------------------------------------
+  output$summary_team_stats <- renderUI({
+    sf <- summary_filtered()
+    shots_df     <- sf$shots
+    turnovers_df <- sf$turnovers
+    faceoffs_df  <- sf$faceoffs
+    
+    shots_vt  <- if (nrow(shots_df) > 0 && "team" %in% names(shots_df))
+      sum(shots_df$team == "VT", na.rm = TRUE) else 0
+    shots_opp <- if (nrow(shots_df) > 0 && "team" %in% names(shots_df))
+      sum(shots_df$team != "VT" & !is.na(shots_df$team), na.rm = TRUE) else 0
+    
+    hd_vt <- 0; hd_opp <- 0
+    if (nrow(shots_df) > 0 && all(c("x_coord", "y_coord", "team") %in% names(shots_df))) {
+      has_loc  <- !is.na(shots_df$x_coord) & !is.na(shots_df$y_coord)
+      vt_rows  <- shots_df[has_loc & shots_df$team == "VT", ]
+      opp_rows <- shots_df[has_loc & shots_df$team != "VT" & !is.na(shots_df$team), ]
+      if (nrow(vt_rows) > 0)
+        hd_vt <- sum(classify_danger(vt_rows$x_coord, vt_rows$y_coord) == "High Danger")
+      if (nrow(opp_rows) > 0)
+        # Mirror x for opponent shots — they attack VT's own net, same convention
+        # used in compute_goalie_stats().
+        hd_opp <- sum(classify_danger(200 - opp_rows$x_coord, opp_rows$y_coord) == "High Danger")
+    }
+    
+    takeaways_vt <- if (nrow(turnovers_df) > 0 && "type" %in% names(turnovers_df))
       sum(turnovers_df$type == "takeaway", na.rm = TRUE) else 0
-    n_giveaways <- if (nrow(turnovers_df) > 0 && "type" %in% names(turnovers_df))
+    giveaways_vt <- if (nrow(turnovers_df) > 0 && "type" %in% names(turnovers_df))
       sum(turnovers_df$type == "giveaway", na.rm = TRUE) else 0
-    n_faceoffs  <- nrow(faceoffs_df)
-    n_fo_wins   <- if (n_faceoffs > 0 && "result" %in% names(faceoffs_df))
+    
+    fo_total   <- nrow(faceoffs_df)
+    fo_wins_vt <- if (fo_total > 0 && "result" %in% names(faceoffs_df))
       sum(faceoffs_df$result == "win", na.rm = TRUE) else 0
-
-    stat_box <- function(label, value, color) {
-      div(
-        class = "card text-center mb-3",
-        style = paste0("border-top: 4px solid ", color, ";"),
-        div(class = "card-body py-3",
-          h2(value, style = paste0("color:", color, "; font-weight:700; margin:0;")),
-          p(label, class = "mb-0 text-muted fw-bold")
-        )
+    fo_pct_vt  <- if (fo_total > 0) round(fo_wins_vt / fo_total * 100, 1) else NA_real_
+    fo_pct_opp <- if (!is.na(fo_pct_vt)) round(100 - fo_pct_vt, 1) else NA_real_
+    
+    # One comparison row: VT value | label | opponent value, with a two-color bar
+    stat_row <- function(label, vt_val, opp_val, vt_pct = NULL, opp_pct = NULL) {
+      if (is.null(vt_pct)) {
+        v <- suppressWarnings(as.numeric(vt_val))
+        o <- suppressWarnings(as.numeric(opp_val))
+        total <- v + o
+        vt_pct  <- if (!is.na(total) && total > 0) v / total * 100 else 50
+        opp_pct <- 100 - vt_pct
+      }
+      div(class = "mb-3",
+          div(class = "d-flex justify-content-between align-items-center mb-1",
+              tags$span(style = paste0("font-weight:700; color:", VT_MAROON, ";"), vt_val),
+              tags$span(style = "font-size:0.78rem; color:#888; text-transform:uppercase; letter-spacing:0.5px;", label),
+              tags$span(style = "font-weight:700; color:#333;", opp_val)
+          ),
+          div(class = "d-flex", style = "height:6px; border-radius:4px; overflow:hidden; background:#e9ecef;",
+              div(style = paste0("width:", vt_pct, "%; background:", VT_MAROON, ";")),
+              div(style = paste0("width:", opp_pct, "%; background:#333;"))
+          )
       )
     }
-
-    fluidRow(
-      column(2, stat_box("Shots",        n_shots,                          VT_MAROON)),
-      column(2, stat_box("VT Goals",     n_goals,                          "#c0392b")),
-      column(2, stat_box("Takeaways",    n_takeaways,                      "#198754")),
-      column(2, stat_box("Giveaways",    n_giveaways,                      VT_ORANGE)),
-      column(2, stat_box("Faceoff Wins", paste0(n_fo_wins, " / ", n_faceoffs), "#2471a3"))
+    
+    tagList(
+      stat_row("Shots", shots_vt, shots_opp),
+      stat_row("High Danger Shots", hd_vt, hd_opp),
+      stat_row("Takeaways", takeaways_vt, "\u2014", 50, 50),
+      stat_row("Giveaways", giveaways_vt, "\u2014", 50, 50),
+      if (!is.na(fo_pct_vt))
+        stat_row("Faceoff %", paste0(fo_pct_vt, "%"), paste0(fo_pct_opp, "%"), fo_pct_vt, fo_pct_opp)
+      else
+        stat_row("Faceoff %", "\u2014", "\u2014", 50, 50),
+      div(class = "alert alert-light border mt-3 mb-0", style = "font-size:0.76rem;",
+          icon("circle-info"),
+          " Takeaways/Giveaways are only tracked for VT players currently.")
     )
   })
 
   output$summary_shot_map <- renderPlot({
-    df <- safe_df(summary_data$shots)
+    df <- summary_filtered()$shots
     shots_with_loc <- if (nrow(df) > 0 && "x_coord" %in% names(df))
       df[!is.na(df$x_coord), ] else NULL
     draw_rink(shots_df = shots_with_loc)
@@ -752,11 +899,186 @@ server <- function(input, output, session) {
               class    = "table-striped table-hover")
   }
 
-  output$table_faceoffs  <- renderDT({ make_dt(summary_data$faceoffs) })
-  output$table_turnovers <- renderDT({ make_dt(summary_data$turnovers) })
-  output$table_shots     <- renderDT({ make_dt(summary_data$shots) })
-  output$table_goals     <- renderDT({ make_dt(summary_data$goals) })
-  output$table_on_ice    <- renderDT({ make_dt(summary_data$on_ice) })
+  # Looks up "#jersey Full Name" for a player_id; used by the play-by-play log
+  player_name_lookup <- function(pid, players_df) {
+    if (is.null(pid) || is.na(pid)) return("\u2014")
+    nm <- players_df$full_name[players_df$id == pid]
+    jn <- players_df$jersey_num[players_df$id == pid]
+    if (length(nm) == 1) paste0("#", jn, " ", nm) else paste0("Player ", pid)
+  }
+  
+  # ----------------------------------------------------------
+  # PLAY-BY-PLAY: every faceoff/turnover/shot/goal, in entry order
+  # ----------------------------------------------------------
+  output$table_play_by_play <- renderDT({
+    players_df <- analytics_data()$players
+    sf <- summary_filtered()
+    fo <- sf$faceoffs
+    to <- sf$turnovers
+    sh <- sf$shots
+    gl <- sf$goals
+    
+    rows <- list()
+    
+    if (nrow(fo) > 0) {
+      rows[[length(rows) + 1]] <- data.frame(
+        created_at  = fo$created_at,
+        period      = fo$period,
+        game_time   = fo$game_time,
+        event       = "Faceoff",
+        description = paste0(sapply(fo$player_id, player_name_lookup, players_df),
+                             " \u2014 ", toupper(fo$result), " (", fo$zone, " zone)"),
+        stringsAsFactors = FALSE
+      )
+    }
+    
+    if (nrow(to) > 0) {
+      rows[[length(rows) + 1]] <- data.frame(
+        created_at  = to$created_at,
+        period      = to$period,
+        game_time   = to$game_time,
+        event       = "Turnover",
+        description = paste0(sapply(to$player_id, player_name_lookup, players_df),
+                             " \u2014 ", toupper(to$type), " (", to$zone, " zone)"),
+        stringsAsFactors = FALSE
+      )
+    }
+    
+    if (nrow(sh) > 0) {
+      who <- ifelse(sh$team == "VT",
+                    sapply(sh$player_id, player_name_lookup, players_df),
+                    "Opponent")
+      rows[[length(rows) + 1]] <- data.frame(
+        created_at  = sh$created_at,
+        period      = sh$period,
+        game_time   = sh$game_time,
+        event       = "Shot",
+        description = paste0(who, " \u2014 ", sh$shot_type, " shot, ", sh$result,
+                             " (", sh$team, ")"),
+        stringsAsFactors = FALSE
+      )
+    }
+    
+    if (nrow(gl) > 0) {
+      scorer  <- ifelse(gl$team == "VT",
+                        sapply(gl$scorer_id, player_name_lookup, players_df),
+                        "Opponent")
+      assists <- mapply(function(a1, a2) {
+        parts <- c(
+          if (!is.na(a1)) player_name_lookup(a1, players_df) else NA,
+          if (!is.na(a2)) player_name_lookup(a2, players_df) else NA
+        )
+        parts <- parts[!is.na(parts)]
+        if (length(parts) == 0) "unassisted" else paste("assist:", paste(parts, collapse = ", "))
+      }, gl$assist1_id, gl$assist2_id)
+      rows[[length(rows) + 1]] <- data.frame(
+        created_at  = gl$created_at,
+        period      = gl$period,
+        game_time   = gl$game_time,
+        event       = "GOAL",
+        description = paste0(scorer, " \u2014 ", toupper(gl$team), " goal (", assists, ")"),
+        stringsAsFactors = FALSE
+      )
+    }
+    
+    if (length(rows) == 0) return(make_dt(data.frame()))
+    
+    pbp <- dplyr::bind_rows(rows) |>
+      dplyr::mutate(created_at = as.POSIXct(created_at)) |>
+      dplyr::arrange(created_at) |>
+      dplyr::select(Period = period, Time = game_time, Event = event, Description = description)
+    
+    make_dt(pbp)
+  })
+  
+  # ----------------------------------------------------------
+  # PLAYER STATS: this game only, computed the same way as the
+  # season Players tab but scoped to summary_data (single game)
+  # ----------------------------------------------------------
+  output$table_player_stats <- renderDT({
+    d <- analytics_data()
+    req(nrow(d$players) > 0)
+    
+    sf <- summary_filtered()
+    stats <- compute_player_stats(
+      players   = d$players,
+      shots     = sf$shots,
+      goals     = sf$goals,
+      faceoffs  = sf$faceoffs,
+      turnovers = sf$turnovers,
+      on_ice    = sf$on_ice,
+      n_games   = 1
+    )
+    
+    if (nrow(stats) == 0) return(make_dt(data.frame()))
+    
+    stats |>
+      dplyr::transmute(
+        Player   = paste0("#", jersey_num, " ", full_name),
+        Pos      = position,
+        G        = goals,
+        A        = a1 + a2,
+        Pts      = points,
+        Shots    = shots,
+        `SH%`  = shoot_pct,
+        xG       = xg_total,
+        `+/-`    = plus_minus,
+        `xG+/-`  = xg_plus_minus,
+        TA       = takeaways,
+        GA       = giveaways,
+        `FO%`    = ifelse(is.na(fo_pct), "\u2014", paste0(fo_pct, "%"))
+      ) |>
+      dplyr::arrange(dplyr::desc(Pts)) |>
+      make_dt()
+  })
+  
+  # ----------------------------------------------------------
+  # GOALIE STATS: this game only
+  # ----------------------------------------------------------
+  output$table_goalie_stats <- renderDT({
+    d <- analytics_data()
+    
+    sf <- summary_filtered()
+    goalie_stats <- tryCatch(
+      compute_goalie_stats(
+        shots  = sf$shots,
+        on_ice = sf$on_ice
+      ),
+      error = function(e) NULL
+    )
+    
+    if (is.null(goalie_stats) || nrow(goalie_stats) == 0) return(make_dt(data.frame()))
+    
+    # Guard against any expected column being absent (e.g. stale cache)
+    required_cols <- c("goalie_id", "shots_against", "saves", "goals_against",
+                       "save_pct", "hd_save_pct", "md_save_pct", "ld_save_pct", "gsax")
+    missing_cols <- setdiff(required_cols, names(goalie_stats))
+    if (length(missing_cols) > 0) {
+      showNotification(
+        paste("Goalie stats missing columns:", paste(missing_cols, collapse = ", ")),
+        type = "error", duration = 8
+      )
+      return(make_dt(data.frame()))
+    }
+    
+    goalie_stats |>
+      dplyr::left_join(
+        d$players |> dplyr::select(id, jersey_num, full_name),
+        by = c("goalie_id" = "id")
+      ) |>
+      dplyr::transmute(
+        Goalie    = paste0("#", jersey_num, " ", full_name),
+        SA        = shots_against,
+        SV        = saves,
+        GA        = goals_against,
+        `SV%`     = ifelse(is.na(save_pct), "\u2014", paste0(save_pct, "%")),
+        `HD SV%`  = ifelse(is.na(hd_save_pct), "\u2014", paste0(hd_save_pct, "%")),
+        `MD SV%`  = ifelse(is.na(md_save_pct), "\u2014", paste0(md_save_pct, "%")),
+        `LD SV%`  = ifelse(is.na(ld_save_pct), "\u2014", paste0(ld_save_pct, "%")),
+        GSAx      = ifelse(is.na(gsax), "\u2014", paste0(ifelse(gsax >= 0, "+", ""), gsax))
+      ) |>
+      make_dt()
+  })
 
   # ============================================================
   # SEASON ANALYTICS CACHE
@@ -782,11 +1104,10 @@ server <- function(input, output, session) {
                            filters = c("active" = "eq.true"),
                            order   = "jersey_num.asc")
       shots     <- sb_select("shots")
-      print(names(shots))
       goals     <- sb_select("goals")
       faceoffs  <- sb_select("faceoffs")
       turnovers <- sb_select("turnovers")
-      on_ice    <- sb_select("on_ice", select = "player_id,shot_id")
+      on_ice    <- sb_select("on_ice", select = "player_id,shot_id,game_id")
       games     <- sb_select("games", order = "game_date.asc")
       analytics_data(list(
         players   = players,
@@ -808,6 +1129,18 @@ server <- function(input, output, session) {
   # PLAYER ANALYSIS TAB
   # ============================================================
 
+  # Populate the game filter dropdown ("Full Season" + one entry per game)
+  observe({
+    d <- analytics_data()
+    req(nrow(d$games) > 0)
+    game_choices <- c(
+      "Full Season" = "season",
+      setNames(as.character(d$games$id),
+               paste0(d$games$game_date, " vs ", d$games$opponent))
+    )
+    updateSelectInput(session, "player_game_filter", choices = game_choices)
+  })
+  
   # Populate player dropdown from cache — no server=TRUE for fast response
   observe({
     d <- analytics_data()
@@ -849,15 +1182,32 @@ server <- function(input, output, session) {
   })
 
   # Compute full team stats — pure computation from cache, no Supabase calls
+  # Filters any event table down to a single game_id, or passes it through
+  # unfiltered when "Full Season" is selected. Used by team_stats() below.
+  filter_by_game <- function(df) {
+    if (is.null(input$player_game_filter) || input$player_game_filter == "season") return(df)
+    if (is.null(df) || nrow(df) == 0 || !"game_id" %in% names(df)) return(df[0, ])
+    df[df$game_id == as.integer(input$player_game_filter), ]
+  }
+  
   team_stats <- reactive({
     
     d <- analytics_data()
     req(nrow(d$players) > 0)
     
+    shots_f     <- filter_by_game(d$shots)
+    goals_f     <- filter_by_game(d$goals)
+    faceoffs_f  <- filter_by_game(d$faceoffs)
+    turnovers_f <- filter_by_game(d$turnovers)
+    on_ice_f    <- filter_by_game(d$on_ice)
+    
+    single_game <- !is.null(input$player_game_filter) && input$player_game_filter != "season"
+    
     if (input$player_type == "Goalie") {
       
       goalie_stats <- compute_goalie_stats(
-        shots = d$shots
+        shots  = shots_f,
+        on_ice = d$on_ice   # unfiltered: games_played should reflect real season count
       )
       
       goalie_stats |>
@@ -873,19 +1223,19 @@ server <- function(input, output, session) {
         ) |>
         dplyr::mutate(
           player_id = goalie_id,
-          games_played = d$n_games
+          games_played = if (single_game) 1L else games_played
         )
       
     } else {
       
       compute_player_stats(
         players   = d$players,
-        shots     = d$shots,
-        goals     = d$goals,
-        faceoffs  = d$faceoffs,
-        turnovers = d$turnovers,
-        on_ice    = d$on_ice,
-        n_games   = d$n_games
+        shots     = shots_f,
+        goals     = goals_f,
+        faceoffs  = faceoffs_f,
+        turnovers = turnovers_f,
+        on_ice    = on_ice_f,
+        n_games   = if (single_game) 1L else d$n_games
       )
     }
   })
@@ -943,17 +1293,26 @@ server <- function(input, output, session) {
     
     box <- function(val, lbl, color = VT_MAROON) {
       column(3,
-             div(class = "card text-center",
-                 style = paste0("border-top:4px solid ", color, ";"),
-                 div(class = "card-body py-2",
-                     h3(val,
+             div(class = "card text-center mb-3",
+                 style = paste0(
+                   "border:none; border-radius:12px;",
+                   " background:linear-gradient(160deg, ", color, "12 0%, #ffffff 65%);",
+                   " box-shadow:0 3px 10px rgba(0,0,0,0.08);",
+                   " border-left:5px solid ", color, ";"
+                 ),
+                 div(class = "card-body py-3",
+                     h2(val,
                         style = paste0(
                           "color:", color,
-                          "; font-weight:700; margin:0;"
+                          "; font-weight:800; margin:0; font-size:2rem;",
+                          " letter-spacing:-0.5px;"
                         )),
-                     p(lbl,
-                       class = "mb-0 text-muted",
-                       style = "font-size:0.8rem; font-weight:600;")
+                     p(toupper(lbl),
+                       class = "mb-0",
+                       style = paste0(
+                         "font-size:0.72rem; font-weight:700; letter-spacing:0.8px;",
+                         " color:#6c757d; margin-top:4px;"
+                       ))
                  ))
       )
     }
@@ -962,27 +1321,17 @@ server <- function(input, output, session) {
       
       fluidRow(
         box(g$games_played, "Games", VT_MAROON),
-        box(g$shots_against, "Shots Against", "#2471a3"),
-        box(g$saves, "Saves", "#117a65"),
-        box(g$goals_against, "Goals Against", "#c0392b")
+        box(g$shots_against, "Shots Against", VT_ORANGE),
+        box(if (length(g$gaa) == 0 || is.na(g$gaa)) "N/A" else g$gaa, "GAA", 
+            VT_MAROON),
+        box(if (length(g$xgaa) == 0 || is.na(g$xgaa)) "N/A" else g$xgaa, "xGAA", VT_ORANGE)
       ),
       
       fluidRow(
-        box(
-          paste0(g$save_pct, "%"),
-          "Save %",
-          "#7d3c98"
-        ),
-        box(
-          paste0(g$hd_save_pct, "%"),
-          "High Danger Save %",
-          "#d35400"
-        ),
-        box(
-          paste0(g$md_save_pct, "%"),
-          "Medium Danger Save %",
-          "#2980b9"
-        )
+        box(paste0(g$save_pct, "%"), "Save %", VT_ORANGE),
+        box(paste0(g$hd_save_pct, "%"), "High Danger Save %", VT_MAROON),
+        box(paste0(g$md_save_pct, "%"), "Medium Danger Save %", VT_ORANGE),
+        box(paste0(g$ld_save_pct, "%"), "Low Danger Save %", VT_MAROON)
       )
     )
   })
@@ -991,45 +1340,48 @@ server <- function(input, output, session) {
   output$player_stat_boxes <- renderUI({
     req(nrow(selected_player_stats()) > 0)
     p <- selected_player_stats()
-
+    
     box <- function(val, lbl, color = VT_MAROON) {
-      column(2,
-        div(class = "card text-center",
-            style = paste0("border-top:4px solid ", color, ";"),
-            div(class = "card-body py-2",
-                h3(val,  style = paste0("color:", color, "; font-weight:700; margin:0;")),
-                p(lbl,   class = "mb-0 text-muted", style = "font-size:0.8rem; font-weight:600;")
-            ))
+      column(3,
+             div(class = "card text-center mb-3",
+                 style = paste0(
+                   "border:none; border-radius:12px;",
+                   " background:linear-gradient(160deg, ", color, "12 0%, #ffffff 65%);",
+                   " box-shadow:0 3px 10px rgba(0,0,0,0.08);",
+                   " border-left:5px solid ", color, ";"
+                 ),
+                 div(class = "card-body py-3",
+                     h2(val,
+                        style = paste0(
+                          "color:", color,
+                          "; font-weight:800; margin:0; font-size:2rem;",
+                          " letter-spacing:-0.5px;"
+                        )),
+                     p(toupper(lbl),
+                       class = "mb-0",
+                       style = paste0(
+                         "font-size:0.72rem; font-weight:700; letter-spacing:0.8px;",
+                         " color:#6c757d; margin-top:4px;"
+                       ))
+                 ))
       )
     }
-
+    
     pm_label    <- paste0(ifelse(p$plus_minus > 0, "+", ""), p$plus_minus)
     xgpm_label  <- paste0(ifelse(p$xg_plus_minus > 0, "+", ""), round(p$xg_plus_minus, 2))
-    pm_color    <- if (p$plus_minus > 0) "#198754" else if (p$plus_minus < 0) "#dc3545" else "#6c757d"
-    xgpm_color  <- if (p$xg_plus_minus > 0) "#198754" else if (p$xg_plus_minus < 0) "#dc3545" else "#6c757d"
-
+    
     tagList(
       fluidRow(
         box(p$goals,      "Goals",         VT_MAROON),
-        box(p$a1 + p$a2,  "Assists",       "#2471a3"),
-        box(p$points,     "Points",        "#1a5276"),
-        box(p$shots,      "Shots",         "#6c757d"),
-        box(paste0(p$shoot_pct, "%"), "Shoot%", "#117a65"),
-        box(round(p$xg_total, 1), "xG Total", "#7d3c98")
+        box(p$a1 + p$a2,  "Assists",       VT_ORANGE),
+        box(p$points,     "Points",        VT_MAROON),
+        box(round(p$xg_total, 1), "xG Total", VT_ORANGE),
       ),
       fluidRow(
-        column(3, div(class = "card text-center mb-3",
-          style = paste0("border-top:4px solid ", pm_color, ";"),
-          div(class = "card-body py-2",
-              h3(pm_label, style = paste0("color:", pm_color, "; font-weight:700; margin:0;")),
-              p("+/−  (Goals For − Against on Ice)", class = "mb-0 text-muted",
-                style = "font-size:0.8rem; font-weight:600;")))),
-        column(3, div(class = "card text-center mb-3",
-          style = paste0("border-top:4px solid ", xgpm_color, ";"),
-          div(class = "card-body py-2",
-              h3(xgpm_label, style = paste0("color:", xgpm_color, "; font-weight:700; margin:0;")),
-              p("xG+/−  (xG For − Against on Ice)", class = "mb-0 text-muted",
-                style = "font-size:0.8rem; font-weight:600;"))))
+        box(pm_label,   "+/\u2212", VT_ORANGE),
+        box(xgpm_label, "xG+/\u2212", VT_MAROON),
+        box(p$shots,      "Shots",         VT_ORANGE),
+        box(paste0(p$shoot_pct, "%"), "Shoot%", VT_MAROON)
       )
     )
   })
@@ -1147,29 +1499,22 @@ server <- function(input, output, session) {
     }
 
     tagList(
-      metric_row("xG Total", round(p$xg_total, 2),
-                 "Sum of shot probability across all shots taken"),
-      metric_row("Goals − xG", paste0(ifelse(p$g_minus_xg >= 0, "+", ""), p$g_minus_xg),
-                 "Positive = scoring above expectation"),
+      metric_row("xG Total", round(p$xg_total, 2)),
+      metric_row("Goals Scored Above Expected", paste0(ifelse(p$g_minus_xg >= 0, "+", ""), p$g_minus_xg),),
       metric_row("Shooting %", paste0(p$shoot_pct, "%"),
                  paste0(p$goals, " goals on ", p$shots, " shots")),
       metric_row("Shots on Goal %", paste0(p$on_goal_pct, "%"),
-                 "% of shot attempts that were on target"),
-      metric_row("High Danger Shots", paste0(p$high_danger, " (", p$hd_pct, "%)"),
-                 "Shots from ≤25 ft at angle ≤45°"),
-      metric_row("avg xG per Shot", paste0(round(p$xg_per_shot, 3)),
-                 "Shot quality: higher = more dangerous locations"),
+                 "% of shot attempts that were on goal"),
+      metric_row("High Danger Shots", paste0(p$high_danger, " (", p$hd_pct, "%)")),
+      metric_row("avg xG per Shot", paste0(round(p$xg_per_shot, 3))),
       metric_row("+/\u2212",
-                 paste0(ifelse(p$plus_minus >= 0, "+", ""), p$plus_minus),
-                 "Goals scored vs. allowed while on ice"),
+                 paste0(ifelse(p$plus_minus >= 0, "+", ""), p$plus_minus)),
       metric_row("xG+/\u2212",
-                 paste0(ifelse(p$xg_plus_minus >= 0, "+", ""), round(p$xg_plus_minus, 2)),
-                 "Expected goals for minus against while on ice"),
-      metric_row("Takeaways", p$takeaways, "Puck recoveries from opponents"),
-      metric_row("Giveaways", p$giveaways, "Puck losses to opponents"),
+                 paste0(ifelse(p$xg_plus_minus >= 0, "+", ""), round(p$xg_plus_minus, 2))),
+      metric_row("Takeaways", p$takeaways),
+      metric_row("Giveaways", p$giveaways),
       metric_row("TA/GA Ratio",
-                 if (!is.na(p$ta_ga_ratio)) p$ta_ga_ratio else paste0(p$takeaways, "/0"),
-                 "Takeaways \u00f7 Giveaways — higher is better"),
+                 if (!is.na(p$ta_ga_ratio)) p$ta_ga_ratio else paste0(p$takeaways, "/0")),
       if (p$fo_total > 0)
         metric_row("Faceoff W\u2212L", paste0(p$fo_wins, "\u2212", p$fo_total - p$fo_wins),
                    paste0(p$fo_pct, "% win rate"))
@@ -1194,8 +1539,13 @@ server <- function(input, output, session) {
       metric_row("Games Played", g$games_played),
       metric_row("Shots Against", g$shots_against),
       metric_row("Saves", g$saves),
-      metric_row("Goals Against", g$goals_against),
       metric_row("Save %", pct_str(g$save_pct)),
+      metric_row("Goals Against", g$goals_against),
+      metric_row("Expected Goals Against", g$xgaa * g$games_played),
+      metric_row("Goals Saved Above Expected",
+        if (length(g$gsax) == 0 || is.na(g$gsax)) "N/A"
+        else paste0(ifelse(g$gsax >= 0, "+", ""), g$gsax)
+      ),
       metric_row("High Danger Shots", g$high_danger_shots,
                  paste0(g$high_danger_saves, " saved")),
       metric_row("High Danger Save %", pct_str(g$hd_save_pct)),
@@ -1214,12 +1564,14 @@ server <- function(input, output, session) {
     d <- analytics_data()
 
     player_shots <- tryCatch({
-      s <- d$shots
+      s <- filter_by_game(d$shots)
       if (nrow(s) == 0 || !"player_id" %in% names(s)) return(draw_rink())
       if(input$player_type == "Goalie") {
         
         s <- s[
-          s$goalie_id == as.integer(input$player_select) &
+          s$team != "VT" & !is.na(s$team) &
+            s$goalie_id == as.integer(input$player_select) &
+            !is.na(s$goalie_id) &
             !is.na(s$x_coord),
         ]
         

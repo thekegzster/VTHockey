@@ -203,6 +203,7 @@ if (nrow(vt_shots) == 0 || sum(!is.na(vt_shots$x_coord)) == 0) {
   tab_header(title = "Shots by Danger Zone") |>
   data_color(columns = xG,
              palette = c("#f4cccc","#861F41"))
+}
 ```
 
 ## Faceoffs
@@ -451,18 +452,21 @@ if (nrow(player_stats) == 0 || sum(player_stats$shots) == 0) {
 
 ```{r on-ice}
 #| echo: false
-if (nrow(on_ice) == 0) {
-  cat("No on-ice data recorded yet.")
+
+oag <- compute_on_ice_goals_for(on_ice, shots, players, game_id = params$game_id)
+
+if (nrow(oag) == 0) {
+  cat("No goals with on-ice data recorded yet.")
 } else {
-  on_ice |>
-    filter(team == "VT") |>
-    count(full_name, jersey_num, name = "Times On Ice") |>
-    arrange(desc(`Times On Ice`)) |>
-    mutate(Player = paste0("#", jersey_num, " ", full_name)) |>
-    select(Player, `Times On Ice`) |>
+  oag |>
+    dplyr::left_join(players |> dplyr::select(id, jersey_num, full_name),
+                     by = c("player_id" = "id")) |>
+    dplyr::arrange(dplyr::desc(on_ice_goals_for)) |>
+    dplyr::mutate(Player = paste0("#", jersey_num, " ", full_name)) |>
+    dplyr::select(Player, `On Ice Goals For` = on_ice_goals_for) |>
     gt() |>
-    tab_header(title = "VT Players On Ice at Time of Goal",
-               subtitle = "(all goals — both teams)")
+    tab_header(title = "VT Players On Ice for Goals",
+               subtitle = "Number of VT goals scored while on the ice (skaters only)")
 }
 ```
 

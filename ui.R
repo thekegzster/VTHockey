@@ -504,33 +504,40 @@ ui <- page_navbar(
 
     div(class = "container-fluid py-4",
 
-      div(
-        class = "d-flex justify-content-between align-items-center mb-4",
-        h2("Game Summary", style = paste0("color:", VT_MAROON, "; font-weight:700; margin:0;")),
-        actionButton("btn_refresh_summary", "Refresh Data",
-                     icon = icon("rotate"), class = "btn-primary")
-      ),
+        div(
+          class = "d-flex justify-content-between align-items-center mb-4",
+          h2("Game Summary", style = paste0("color:", VT_MAROON, "; font-weight:700; margin:0;")),
+          div(class = "d-flex align-items-center gap-2",
+              div(style = "min-width:180px;",
+                  selectInput("summary_period_filter", NULL,
+                              choices = c("All Periods" = "all", PERIOD_CHOICES),
+                              width = "100%")
+              ),
+              actionButton("btn_refresh_summary", "Refresh Data",
+                           icon = icon("rotate"), class = "btn-primary")
+          )
+        ),
 
-      # Stat counters
-      uiOutput("summary_value_boxes"),
-
+      # Scoreboard
+      uiOutput("summary_scoreboard"),
+      
       br(),
-
+      
       # Shot map
       fluidRow(
         column(8,
-          card(
-            card_header("Shot Map (all shots this game)"),
-            card_body(
-              plotOutput("summary_shot_map", height = "380px")
-            )
-          )
+               card(
+                 card_header("Shot Map (all shots this game)"),
+                 card_body(
+                   plotOutput("summary_shot_map", height = "380px")
+                 )
+               )
         ),
         column(4,
-          card(
-            card_header("Goal Log"),
-            card_body(uiOutput("summary_goal_list"))
-          )
+               card(
+                 card_header("Team Stats"),
+                 card_body(uiOutput("summary_team_stats"))
+               )
         )
       ),
 
@@ -538,25 +545,17 @@ ui <- page_navbar(
 
       # Detail tables
       tabsetPanel(
-        tabPanel("Faceoffs",
-          br(),
-          DTOutput("table_faceoffs")
+        tabPanel("Play-by-Play",
+                 br(),
+                 DTOutput("table_play_by_play")
         ),
-        tabPanel("Turnovers",
-          br(),
-          DTOutput("table_turnovers")
+        tabPanel("Player Stats",
+                 br(),
+                 DTOutput("table_player_stats")
         ),
-        tabPanel("Shots",
-          br(),
-          DTOutput("table_shots")
-        ),
-        tabPanel("Goals",
-          br(),
-          DTOutput("table_goals")
-        ),
-        tabPanel("On Ice",
-          br(),
-          DTOutput("table_on_ice")
+        tabPanel("Goalie Stats",
+                 br(),
+                 DTOutput("table_goalie_stats")
         )
       )
     )
@@ -573,6 +572,12 @@ ui <- page_navbar(
 
       # ---- Player selector ----
       fluidRow(
+        column(3,
+               selectInput("player_game_filter", "Game",
+                           choices = c("Full Season" = "season"),
+                           width = "100%")
+        ),
+        
         column(3,
                selectInput("player_type", "Player Type",
                            choices = c("Skater", "Goalie"),
@@ -619,19 +624,6 @@ ui <- page_navbar(
       ),
 
       br(),
-
-      # ---- xG explanation ----
-      div(
-        class = "alert alert-light border mt-2",
-        style = "font-size:0.85rem;",
-        tags$b("About xG (Expected Goals): "),
-        "xG estimates the probability that a shot becomes a goal based on
-         where it was taken (distance from net, angle) and shot type.
-         A shot from directly in front at 15 ft might have xG = 0.28,
-         while a shot from centre ice has xG ≈ 0.03.
-         G − xG measures goal-scoring above or below expectation — a
-         positive number means the player is finishing better than average."
-      )
     )
   ),
 

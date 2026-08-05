@@ -145,58 +145,114 @@ compute_plus_minus <- function(on_ice, shots) {
 }
 
 # ============================================================
+# ON-ICE GOALS FOR
+# Counts how many VT goals each skater was on the ice for.
+# Goalies are excluded. Optionally scoped to a single game_id.
+# ============================================================
+
+compute_on_ice_goals_for <- function(on_ice, shots, players, game_id = NULL) {
+  empty <- data.frame(player_id = integer(0), on_ice_goals_for = integer(0))
+  
+  if (is.null(on_ice) || !is.data.frame(on_ice) || nrow(on_ice) == 0) return(empty)
+  if (is.null(shots)  || !is.data.frame(shots)  || nrow(shots)  == 0) return(empty)
+  if (is.null(players) || !is.data.frame(players) || nrow(players) == 0) return(empty)
+  if (!"shot_id" %in% names(on_ice)) return(empty)
+  if (!all(c("id", "team", "result") %in% names(shots))) return(empty)
+  if (!all(c("id", "position") %in% names(players))) return(empty)
+  
+  vt_goals <- shots[shots$result == "goal" & shots$team == "VT" &
+                      !is.na(shots$result) & !is.na(shots$team), ]
+  if (!is.null(game_id) && "game_id" %in% names(shots)) {
+    vt_goals <- vt_goals[vt_goals$game_id == game_id, ]
+  }
+  if (nrow(vt_goals) == 0) return(empty)
+  
+  skater_ids <- players$id[players$position != "G" & !is.na(players$position)]
+  
+  oi <- on_ice[on_ice$team == "VT" & !is.na(on_ice$shot_id) &
+                 on_ice$player_id %in% skater_ids, c("player_id", "shot_id")]
+  merged <- merge(oi, vt_goals[, "id", drop = FALSE], by.x = "shot_id", by.y = "id", all.x = FALSE)
+  if (nrow(merged) == 0) return(empty)
+  
+  merged |>
+    dplyr::group_by(player_id) |>
+    dplyr::summarise(on_ice_goals_for = dplyr::n(), .groups = "drop")
+}
+
+# ============================================================
 # COMPUTE FULL PLAYER STATS TABLE
 # Returns one row per skater with all basic + advanced stats
 # ============================================================
 
 ## Computing Goalie Stats
-compute_goalie_stats <- function(shots) {
+compute_goalie_stats <- function(shots, on_ice = data.frame()) {
+  
+  empty_result <- data.frame(
+    goalie_id = integer(0), shots_against = integer(0), saves = integer(0),
+    goals_against = integer(0), xg_against = numeric(0),
+    high_danger_saves = integer(0), medium_danger_saves = integer(0), low_danger_saves = integer(0),
+    high_danger_shots = integer(0), medium_danger_shots = integer(0), low_danger_shots = integer(0),
+    save_pct = numeric(0), hd_save_pct = numeric(0), md_save_pct = numeric(0), ld_save_pct = numeric(0),
+    gsax = numeric(0), games_played = integer(0), gaa = numeric(0), xgaa = numeric(0)
+  )
   
   if (nrow(shots) == 0 || !"goalie_id" %in% names(shots)) {
-    return(data.frame())
+    return(empty_result)
   }
+  
+  has_shot_type <- "shot_type" %in% names(shots)
   
   goalie_shots <- shots |>
     dplyr::filter(team != "VT") |>
     dplyr::filter(!is.na(goalie_id)) |>
     dplyr::mutate(
-      danger = mapply(classify_danger, x_coord, y_coord),
+      shot_type_safe = if (has_shot_type) shot_type else "wrist",
+      danger = mapply(function(x, y) classify_danger(200 - x, y), x_coord, y_coord),
+      xga = mapply(function(x, y, st) {
+        if (is.na(x) || is.na(y)) return(0)
+        calc_xg(200 - x, y, st)
+      }, x_coord, y_coord, shot_type_safe),
       saved = result == "save",
       goal_allowed = result == "goal"
     )
   
-  goalie_shots |>
+  stats <- goalie_shots |>
     dplyr::group_by(goalie_id) |>
     dplyr::summarise(
-      
       shots_against = n(),
       saves = sum(saved),
       goals_against = sum(goal_allowed),
-      
+      xg_against = round(sum(xga, na.rm = TRUE), 2),
       high_danger_saves = sum(saved & danger == "High Danger"),
       medium_danger_saves = sum(saved & danger == "Medium Danger"),
       low_danger_saves = sum(saved & danger == "Low Danger"),
-      
       high_danger_shots = sum(danger == "High Danger"),
       medium_danger_shots = sum(danger == "Medium Danger"),
       low_danger_shots = sum(danger == "Low Danger"),
-      
-      save_pct = ifelse(shots_against > 0, 
-                        round(saves / shots_against * 100, 1), NA_real_),
-      
-      hd_save_pct = ifelse(high_danger_shots > 0,
-                           round(high_danger_saves / high_danger_shots * 100, 1),
-                           NA_real_),
-      
-      md_save_pct = ifelse(medium_danger_shots > 0,
-                           round(medium_danger_saves / medium_danger_shots * 100, 1),
-                           NA_real_),
-      
-      ld_save_pct = ifelse(low_danger_shots > 0,
-                           round(low_danger_saves / low_danger_shots * 100, 1),
-                           NA_real_),
-      
-      .groups="drop"
+      save_pct = ifelse(shots_against > 0, round(saves / shots_against * 100, 1), NA_real_),
+      hd_save_pct = ifelse(high_danger_shots > 0, round(high_danger_saves / high_danger_shots * 100, 1), NA_real_),
+      md_save_pct = ifelse(medium_danger_shots > 0, round(medium_danger_saves / medium_danger_shots * 100, 1), NA_real_),
+      ld_save_pct = ifelse(low_danger_shots > 0, round(low_danger_saves / low_danger_shots * 100, 1), NA_real_),
+      gsax = round(xg_against - goals_against, 2),
+      .groups = "drop"
+    )
+  
+  games_played_df <- if (nrow(on_ice) > 0 && all(c("player_id", "game_id") %in% names(on_ice))) {
+    on_ice |>
+      dplyr::filter(!is.na(player_id)) |>
+      dplyr::distinct(player_id, game_id) |>
+      dplyr::count(player_id, name = "games_played") |>
+      dplyr::rename(goalie_id = player_id)
+  } else {
+    data.frame(goalie_id = integer(0), games_played = integer(0))
+  }
+  
+  stats |>
+    dplyr::left_join(games_played_df, by = "goalie_id") |>
+    dplyr::mutate(
+      games_played = tidyr::replace_na(games_played, 0L),
+      gaa  = ifelse(games_played > 0, round(goals_against / games_played, 2), NA_real_),
+      xgaa = ifelse(games_played > 0, round(xg_against / games_played, 2), NA_real_)
     )
 }
 
