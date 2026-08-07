@@ -94,6 +94,7 @@ player_stats <- compute_player_stats(
   goals     = goals,
   faceoffs  = faceoffs,
   turnovers = turnovers,
+  on_ice    = on_ice,
   n_games   = n_games_covered
 )
 
@@ -188,7 +189,11 @@ if (nrow(vt_shots) == 0 || sum(!is.na(vt_shots$x_coord)) == 0) {
 } else {
   vt_shots |>
   filter(!is.na(x_coord)) |>
-  mutate(zone = classify_danger(x_coord, y_coord)) |>
+  mutate(
+    x_canon = to_canonical_xy(x_coord, y_coord, period)$x,
+    y_canon = to_canonical_xy(x_coord, y_coord, period)$y,
+    zone = classify_danger(x_canon, y_canon)
+  ) |>
   group_by(zone) |>
   summarise(
     Shots  = n(),
@@ -240,18 +245,26 @@ if (nrow(player_stats) == 0) {
       `#`          = jersey_num,
       Player       = full_name,
       Pos          = position,
+      GP           = games_played,
       G            = goals,
       A1           = a1,
       A2           = a2,
       PTS          = points,
+      `+/-`        = plus_minus,
       S            = shots,
       `S%`         = shoot_pct,
       `xG`         = xg_total,
+      `xG+/-`      = xg_plus_minus,
       `GAE`        = g_minus_xg,
       `SQ`         = xg_per_shot,
       `HD%`        = hd_pct,
-      TA    = takeaways,
-      GA    = giveaways,
+      TA           = takeaways,
+      GA           = giveaways,
+      BLK          = blocks,
+      PPG          = pp_goals,
+      PPP          = pp_points,
+      SHG          = sh_goals,
+      SHP          = sh_points,
       `FO%`        = fo_pct
     ) |>
     gt() |>
@@ -266,8 +279,8 @@ if (nrow(player_stats) == 0) {
     tab_style(style = cell_text(weight = "bold"),
               locations = cells_column_labels()) |>
     cols_align(align = "center",
-               columns = c(G, A1, A2, PTS, S, `S%`, xG, GAE,
-                           SQ, `HD%`, TA, GA, `FO%`)) |>
+               columns = c(GP, G, A1, A2, PTS, `+/-`, S, `S%`, xG, `xG+/-`, GAE,
+                           SQ, `HD%`, TA, GA, BLK, PPG, PPP, SHG, SHP, `FO%`)) |>
     cols_width(
       `#`     ~ px(40),
       Player  ~ px(140),
@@ -286,7 +299,7 @@ if (nrow(player_stats) == 0) {
 }
 ```
 
-**Column key:** G = Goals, A1/A2 = Primary/Secondary Assists, S% = Shooting %, xG = Expected Goals, GAE = Goals above expected, SQ = Average shot quality (xG/Shot), HD% = High danger shot %, TA = Takeaways, GA = Giveaways, FO% = Faceoff win %
+**Column key:** GP = Games Played, G = Goals, A1/A2 = Primary/Secondary Assists, +/- = Plus/Minus, S% = Shooting %, xG = Expected Goals, xG+/- = xG Plus/Minus, GAE = Goals above expected, SQ = Average shot quality (xG/Shot), HD% = High danger shot %, TA = Takeaways, GA = Giveaways, BLK = Blocked Shots, PPG/PPP = Power Play Goals/Points, SHG/SHP = Short Handed Goals/Points, FO% = Faceoff win %
 
 ## Faceoff Leaderboard
 
@@ -344,7 +357,14 @@ if (nrow(turnovers) == 0) {
 #| echo: false
 #| fig-height: 5
 loc_shots <- vt_shots[!is.na(vt_shots$x_coord), ]
-if (nrow(loc_shots) == 0) cat("No shot location data yet.") else draw_rink(loc_shots)
+if (nrow(loc_shots) == 0) {
+  cat("No shot location data yet.")
+} else {
+  disp <- to_display_xy(loc_shots$x_coord, loc_shots$y_coord, loc_shots$period)
+  loc_shots$x_coord <- disp$x
+  loc_shots$y_coord <- disp$y
+  draw_rink(loc_shots, attack_right = FALSE)
+}
 ```
 
 ## Shots by Period
@@ -352,12 +372,14 @@ if (nrow(loc_shots) == 0) cat("No shot location data yet.") else draw_rink(loc_s
 ```{r shot-map-period}
 #| echo: false
 #| fig-height: 5
-if (nrow(loc_shots) > 0) {
-  for (per in unique(loc_shots$period)) {
-    sub <- loc_shots[loc_shots$period == per, ]
+
+raw_loc_shots <- vt_shots[!is.na(vt_shots$x_coord), ]
+if (nrow(raw_loc_shots) > 0) {
+  for (per in unique(raw_loc_shots$period)) {
+    sub <- raw_loc_shots[raw_loc_shots$period == per, ]
     lbl <- switch(per, "1"="1st Period","2"="2nd Period","3"="3rd Period",
                   "OT"="Overtime", per)
-    p <- draw_rink(sub) +
+    p <- draw_rink(sub, attack_right = vt_attacks_right(per)) +
       labs(title = lbl) +
       theme(plot.title = element_text(size=14, face="bold", color="#861F41"))
     print(p)
@@ -517,15 +539,3 @@ if (nrow(games) == 0) {
     cols_align(align="center", columns=c(Result,GF,GA,Shots,xGF,`FO%`,TAs))
 }
 ```
-
----
-
-::: {.callout-note collapse="true"}
-## xG Model Notes
-Expected Goals (xG) are estimated using a logistic regression model trained on
-shot location and type. Inputs: distance from net, horizontal angle, shot type.
-Coefficients are calibrated so the average shot produces ~9–10% xG, consistent
-with NHL-wide shooting percentages. This is a simplified model — production NHL
-models also incorporate pre-shot movement, rush vs. zone entry, and goalie
-positioning.
-:::

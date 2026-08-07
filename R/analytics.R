@@ -13,7 +13,7 @@ GOAL_Y <- 42.5
 # alternates from there for any overtime/shootout periods.
 # ============================================================
 
-HOCKEY_PERIOD_ORDER <- c("1", "2", "3", "OT", "OT2", "OT3", "SO")
+HOCKEY_PERIOD_ORDER <- c("1", "2", "3", "OT", "SO")
 
 vt_attacks_right <- function(period) {
   if (is.null(period) || length(period) == 0) return(TRUE)
@@ -410,6 +410,49 @@ compute_player_stats <- function(players, shots, goals, faceoffs, turnovers,
       dplyr::rename(player_id = assist2_id)
   } else data.frame(player_id = integer(0), a2 = integer(0))
 
+  # --- situational scoring (power play / short handed) ---
+  # A "point" on a PP/SH goal credits the scorer AND both assists, same
+  # convention as regular points (goals + a1 + a2).
+  vt_goals <- if (nrow(goals) > 0 && "team" %in% names(goals))
+    goals[goals$team == "VT" & !is.na(goals$team), ] else goals[0, ]
+  
+  situational_stats <- if (nrow(vt_goals) > 0 && "situation" %in% names(vt_goals)) {
+    pp_goals <- vt_goals[!is.na(vt_goals$situation) & vt_goals$situation == "power_play", ]
+    sh_goals <- vt_goals[!is.na(vt_goals$situation) & vt_goals$situation == "short_handed", ]
+    
+    situational_ids <- function(df, id_col) {
+      if (nrow(df) == 0 || !id_col %in% names(df)) return(integer(0))
+      df[[id_col]][!is.na(df[[id_col]])]
+    }
+    
+    pp_involved <- c(situational_ids(pp_goals, "scorer_id"),
+                     situational_ids(pp_goals, "assist1_id"),
+                     situational_ids(pp_goals, "assist2_id"))
+    sh_involved <- c(situational_ids(sh_goals, "scorer_id"),
+                     situational_ids(sh_goals, "assist1_id"),
+                     situational_ids(sh_goals, "assist2_id"))
+    
+    pp_goal_ids <- situational_ids(pp_goals, "scorer_id")
+    sh_goal_ids <- situational_ids(sh_goals, "scorer_id")
+    
+    all_player_ids <- unique(c(pp_involved, sh_involved))
+    if (length(all_player_ids) == 0) {
+      data.frame(player_id = integer(0), pp_goals = integer(0), pp_points = integer(0),
+                 sh_goals = integer(0), sh_points = integer(0))
+    } else {
+      data.frame(
+        player_id = all_player_ids,
+        pp_goals  = sapply(all_player_ids, function(pid) sum(pp_goal_ids == pid)),
+        pp_points = sapply(all_player_ids, function(pid) sum(pp_involved == pid)),
+        sh_goals  = sapply(all_player_ids, function(pid) sum(sh_goal_ids == pid)),
+        sh_points = sapply(all_player_ids, function(pid) sum(sh_involved == pid))
+      )
+    }
+  } else {
+    data.frame(player_id = integer(0), pp_goals = integer(0), pp_points = integer(0),
+               sh_goals = integer(0), sh_points = integer(0))
+  }
+  
   # --- turnover stats ---
   turnover_stats <- if (nrow(turnovers) > 0 && "type" %in% names(turnovers)) {
     turnovers |>
@@ -448,13 +491,26 @@ compute_player_stats <- function(players, shots, goals, faceoffs, turnovers,
   } else data.frame(player_id = integer(0), fo_total = integer(0),
                     fo_wins = integer(0))
 
+  # --- games played per skater ---
+  # Real per-player appearance count, from distinct game_id per player_id
+  # in on_ice — same approach compute_goalie_stats() already uses. This
+  # replaces the flat n_games fallback with each skater's actual games.
+  games_played_df <- if (nrow(on_ice) > 0 && all(c("player_id", "game_id") %in% names(on_ice))) {
+    on_ice |>
+      dplyr::filter(!is.na(player_id)) |>
+      dplyr::distinct(player_id, game_id) |>
+      dplyr::count(player_id, name = "games_played")
+  } else {
+    data.frame(player_id = integer(0), games_played = integer(0))
+  }
+  
   # --- combine ---
   # Filter to skaters — guard against missing `active` column
   active_flag <- if ("active" %in% names(players)) players$active
-                 else rep(TRUE, nrow(players))
+  else rep(TRUE, nrow(players))
   skaters <- players[players$position != "G" & !is.na(players$position) &
                        active_flag, ]
-
+  
   out <- skaters |>
     dplyr::select(player_id = id, jersey_num, full_name, position) |>
     dplyr::left_join(scorer_g,       by = "player_id") |>
@@ -465,32 +521,40 @@ compute_player_stats <- function(players, shots, goals, faceoffs, turnovers,
     dplyr::left_join(block_stats,    by = "player_id") |>
     dplyr::left_join(fo_stats,       by = "player_id") |>
     dplyr::left_join(pm_stats,       by = "player_id") |>
+    dplyr::left_join(games_played_df, by = "player_id") |>
+    dplyr::left_join(situational_stats, by = "player_id") |>
     dplyr::mutate(
       dplyr::across(c(goals, a1, a2, shots, goals_shot, on_goal,
-                      high_danger, takeaways, giveaways, blocks, fo_total, fo_wins),
+                      high_danger, takeaways, giveaways, blocks, fo_total, fo_wins,
+                      pp_goals, pp_points, sh_goals, sh_points),
                     ~ tidyr::replace_na(.x, 0L)),
       dplyr::across(c(xg_total, xg_per_shot),
                     ~ tidyr::replace_na(.x, 0.0)),
       plus_minus    = tidyr::replace_na(plus_minus,    0L),
       xg_plus_minus = tidyr::replace_na(xg_plus_minus, 0.0),
+      # If we're looking at a single game (n_games == 1) and this player
+      # has no on_ice rows for it, they still get credited that 1 game so
+      # a single-game Summary view doesn't show 0 games played for someone
+      # clearly in the game (e.g. no shots were logged while they were on).
+      games_played = if (n_games == 1) 1L else tidyr::replace_na(games_played, 0L),
       points      = goals + a1 + a2,
       shoot_pct   = ifelse(shots > 0,  round(goals / shots * 100, 1),  0.0),
       on_goal_pct = ifelse(shots > 0,  round(on_goal / shots * 100, 1), 0.0),
       hd_pct      = ifelse(shots > 0,  round(high_danger / shots * 100, 1), 0.0),
       fo_pct      = ifelse(fo_total > 0, round(fo_wins / fo_total * 100, 1), NA_real_),
       g_minus_xg  = round(goals - xg_total, 2),   # goals above expected
-      pts_per_game = round(points / max(n_games, 1), 2),
-      xg_per_game  = round(xg_total / max(n_games, 1), 2),
-      shots_per_game     = round(shots     / max(n_games, 1), 2),
-      takeaways_per_game = round(takeaways / max(n_games, 1), 2),
-      giveaways_per_game = round(giveaways / max(n_games, 1), 2),
+      pts_per_game = round(points / pmax(games_played, 1), 2),
+      xg_per_game  = round(xg_total / pmax(games_played, 1), 2),
+      shots_per_game     = round(shots     / pmax(games_played, 1), 2),
+      takeaways_per_game = round(takeaways / pmax(games_played, 1), 2),
+      giveaways_per_game = round(giveaways / pmax(games_played, 1), 2),
       ta_ga_ratio        = ifelse(giveaways > 0,
                                   round(takeaways / giveaways, 2),
                                   NA_real_),
       net_turnovers      = takeaways - giveaways
     ) |>
     dplyr::arrange(dplyr::desc(points), dplyr::desc(goals))
-
+  
   out
 }
 

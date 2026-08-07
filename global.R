@@ -41,7 +41,7 @@ app_theme <- bs_theme(
 # ---- Period choices (used in multiple tabs) ----
 PERIOD_CHOICES <- c("1st Period" = "1", "2nd Period" = "2",
                     "3rd Period" = "3", "Overtime" = "OT",
-                    "2OT" = "OT2", "3OT" = "OT3", "Shootout" = "SO")
+                    "Shootout" = "SO")
 
 # ---- Shot type choices ----
 SHOT_TYPE_CHOICES <- c("Wrist shot"  = "wrist",

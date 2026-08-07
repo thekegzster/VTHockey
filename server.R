@@ -1549,7 +1549,9 @@ server <- function(input, output, session) {
     }
 
     tagList(
+      metric_row("Games Played", p$games_played),
       metric_row("xG Total", round(p$xg_total, 2)),
+      metric_row("xG per Game", round(p$xg_total / p$games_played, 2)),
       metric_row("Goals Scored Above Expected", paste0(ifelse(p$g_minus_xg >= 0, "+", ""), p$g_minus_xg),),
       metric_row("Shooting %", paste0(p$shoot_pct, "%"),
                  paste0(p$goals, " goals on ", p$shots, " shots")),
@@ -1561,6 +1563,10 @@ server <- function(input, output, session) {
                  paste0(ifelse(p$plus_minus >= 0, "+", ""), p$plus_minus)),
       metric_row("xG+/\u2212",
                  paste0(ifelse(p$xg_plus_minus >= 0, "+", ""), round(p$xg_plus_minus, 2))),
+      metric_row("Power Play Points", p$pp_points, paste0(p$pp_goals, " goals")),
+      metric_row("Short Handed Points", p$sh_points, paste0(p$sh_goals, " goals")),
+      metric_row("Takeaways", p$takeaways),
+      metric_row("Giveaways", p$giveaways),
       metric_row("Takeaways", p$takeaways),
       metric_row("Giveaways", p$giveaways),
       metric_row("TA/GA Ratio",
