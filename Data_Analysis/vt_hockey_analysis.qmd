@@ -470,30 +470,6 @@ if (nrow(player_stats) == 0 || sum(player_stats$shots) == 0) {
 
 ---
 
-# On-Ice at Goals
-
-```{r on-ice}
-#| echo: false
-
-oag <- compute_on_ice_goals_for(on_ice, shots, players, game_id = params$game_id)
-
-if (nrow(oag) == 0) {
-  cat("No goals with on-ice data recorded yet.")
-} else {
-  oag |>
-    dplyr::left_join(players |> dplyr::select(id, jersey_num, full_name),
-                     by = c("player_id" = "id")) |>
-    dplyr::arrange(dplyr::desc(on_ice_goals_for)) |>
-    dplyr::mutate(Player = paste0("#", jersey_num, " ", full_name)) |>
-    dplyr::select(Player, `On Ice Goals For` = on_ice_goals_for) |>
-    gt() |>
-    tab_header(title = "VT Players On Ice for Goals",
-               subtitle = "Number of VT goals scored while on the ice (skaters only)")
-}
-```
-
----
-
 # Game-by-Game
 
 ```{r game-by-game}
