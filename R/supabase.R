@@ -77,8 +77,19 @@ sb_select <- function(table, select = "*", filters = NULL, order = NULL, limit =
 
     resp <- .sb_base_req(paste0(table, "?", params)) |>
       req_perform()
-
-    resp_body_json(resp, simplifyVector = TRUE)
+    
+    result <- resp_body_json(resp, simplifyVector = TRUE)
+    
+    # jsonlite's simplifyVector returns a plain empty list() for a JSON
+    # empty array `[]` (zero matching rows), instead of a zero-row data
+    # frame like it does for non-empty results. Every caller in this app
+    # assumes sb_select() always returns a data frame, so normalize here
+    # once rather than defensively checking in every single caller.
+    if (!is.data.frame(result)) {
+      return(data.frame())
+    }
+    
+    result
   }, error = function(e) {
     message("Supabase select error: ", conditionMessage(e))
     data.frame()

@@ -40,14 +40,24 @@ library(ggplot2)
 #           result values: 'goal', 'save', 'missed', 'blocked'
 # pending_x, pending_y: coordinates of the most recent click (shown as crosshair)
 
-draw_rink <- function(shots_df = NULL, pending_x = NULL, pending_y = NULL) {
-
+draw_rink <- function(shots_df = NULL, pending_x = NULL, pending_y = NULL,
+                      attack_right = TRUE) {
+  
   ICE   <- "#d6eef8"
   RED   <- "#c8102e"
   BLUE  <- "#003087"
   BLACK <- "#111111"
-
+  
   outline <- .rink_outline()
+  
+  attack_right <- isTRUE(attack_right)  # coerce NA/NULL/length-0 to FALSE safely
+  
+  def_zone_label   <- if (attack_right) "DEF ZONE" else "OFF ZONE"
+  off_zone_label   <- if (attack_right) "OFF ZONE" else "DEF ZONE"
+  arrow_label      <- if (attack_right)
+    "\u2192  VT attacks this way  \u2192"
+  else
+    "\u2190  VT attacks this way  \u2190"
 
   p <- ggplot() +
     # --- Ice surface ---
@@ -114,14 +124,14 @@ draw_rink <- function(shots_df = NULL, pending_x = NULL, pending_y = NULL) {
     geom_point(aes(x = 124, y = 64.5), color = RED, size = 2) +
 
     # --- Zone labels ---
-    annotate("text", x = 43,  y = 88, label = "DEF ZONE",
+    annotate("text", x = 43,  y = 88, label = def_zone_label,
              color = "#555555", size = 3, fontface = "italic") +
     annotate("text", x = 100, y = 88, label = "NEUTRAL",
              color = "#555555", size = 3, fontface = "italic") +
-    annotate("text", x = 157, y = 88, label = "OFF ZONE",
+    annotate("text", x = 157, y = 88, label = off_zone_label,
              color = "#555555", size = 3, fontface = "italic") +
-    annotate("text", x = 157, y = -5,
-             label = "\u2192  VT attacks this way  \u2192",
+    annotate("text", x = 100, y = -5,
+             label = arrow_label,
              color = "#861F41", size = 3.5, fontface = "bold") +
 
     coord_fixed(xlim = c(-8, 208), ylim = c(-12, 94)) +

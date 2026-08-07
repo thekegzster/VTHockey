@@ -308,6 +308,21 @@ ui <- page_navbar(
                 ),
                 inline = FALSE
               ),
+              
+              # --- Blocked shot details: only shown for opponent shots that were blocked ---
+              conditionalPanel(
+                condition = "input.shot_team == 'opponent' && input.shot_result == 'blocked'",
+                div(
+                  style = paste0("border-left: 4px solid ", VT_ORANGE,
+                                 "; padding-left: 10px; margin: 6px 0;"),
+                  h6(tagList(icon("shield"), " Blocked By"),
+                     class = "fw-bold mb-2",
+                     style = paste0("color:", VT_ORANGE, ";")),
+                  selectizeInput("shot_blocked_by", "VT player who blocked it",
+                                 choices = NULL, width = "100%",
+                                 options = list(placeholder = "Start typing name or #..."))
+                )
+              ),
 
               # --- Goal details: only shown when result == "goal" ---
               conditionalPanel(

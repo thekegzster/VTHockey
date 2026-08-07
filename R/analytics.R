@@ -8,6 +8,43 @@ GOAL_X <- 189
 GOAL_Y <- 42.5
 
 # ============================================================
+# PERIOD-BASED END SWAP
+# VT attacks left in periods 1 & 3, right in period 2 — and
+# alternates from there for any overtime/shootout periods.
+# ============================================================
+
+HOCKEY_PERIOD_ORDER <- c("1", "2", "3", "OT", "OT2", "OT3", "SO")
+
+vt_attacks_right <- function(period) {
+  if (is.null(period) || length(period) == 0) return(TRUE)
+  period_chr <- as.character(period)
+  idx <- match(period_chr, HOCKEY_PERIOD_ORDER)
+  idx <- ifelse(is.na(idx), 2L, idx)
+  idx %% 2 == 0
+}
+
+# Rotates (x, y) 180° when VT is NOT attacking right, bringing every
+# shot into the canonical "VT attacks right" frame the xG/danger-zone
+# model assumes (net at x=189).
+to_canonical_xy <- function(x, y, period) {
+  flip <- !vt_attacks_right(period)
+  list(
+    x = ifelse(flip, 200 - x, x),
+    y = ifelse(flip, 85 - y, y)
+  )
+}
+
+# Rotates (x, y) 180° for DISPLAY so personal shot maps (and any
+# cross-period aggregate map) show shots as if VT always attacks left.
+to_display_xy <- function(x, y, period) {
+  flip <- vt_attacks_right(period)
+  list(
+    x = ifelse(flip, 200 - x, x),
+    y = ifelse(flip, 85 - y, y)
+  )
+}
+
+# ============================================================
 # xG MODEL
 # Logistic regression based on distance + angle + shot type.
 # Coefficients are calibrated to produce ~9-10% average xG
@@ -41,10 +78,12 @@ calc_xg <- function(x, y, shot_type = "wrist") {
 # Vectorised — adds an `xg` column to a shots data frame
 add_xg <- function(df) {
   if (nrow(df) == 0) return(mutate(df, xg = numeric(0)))
-  st_col <- if ("shot_type" %in% names(df)) df$shot_type else rep("wrist", nrow(df))
+  st_col     <- if ("shot_type" %in% names(df)) df$shot_type else rep("wrist", nrow(df))
+  period_col <- if ("period" %in% names(df)) df$period else rep("1", nrow(df))
+  canon      <- to_canonical_xy(df$x_coord, df$y_coord, period_col)
   df$xg <- mapply(calc_xg,
-                  x         = df$x_coord,
-                  y         = df$y_coord,
+                  x         = canon$x,
+                  y         = canon$y,
                   shot_type = st_col)
   df
 }
@@ -111,14 +150,16 @@ compute_plus_minus <- function(on_ice, shots) {
 
   # Calculate xG for every shot; mirror x for opponent shots so the
   # model targets their net (≈ x = 11) instead of VT's net (x = 189)
-  st_col <- if ("shot_type" %in% names(shots)) shots$shot_type else rep("wrist", nrow(shots))
-  tm_col <- shots$team
-
+  st_col     <- if ("shot_type" %in% names(shots)) shots$shot_type else rep("wrist", nrow(shots))
+  tm_col     <- shots$team
+  period_col <- if ("period" %in% names(shots)) shots$period else rep("1", nrow(shots))
+  canon      <- to_canonical_xy(shots$x_coord, shots$y_coord, period_col)
+  
   shots$xg_pm <- mapply(function(x, y, st, tm) {
     if (is.na(x) || is.na(y)) return(0)
     if (tm == "VT") calc_xg(x,       y, st)
     else            calc_xg(200 - x, y, st)   # mirror to opponent net
-  }, shots$x_coord, shots$y_coord, st_col, tm_col)
+  }, canon$x, canon$y, st_col, tm_col)
 
   # Join on_ice → shots on shot_id
   oi <- on_ice[!is.na(on_ice$shot_id), c("player_id", "shot_id")]
@@ -137,6 +178,55 @@ compute_plus_minus <- function(on_ice, shots) {
 
   merged |>
     dplyr::group_by(player_id) |>
+    dplyr::summarise(
+      plus_minus    = sum(pm_val,  na.rm = TRUE),
+      xg_plus_minus = round(sum(xg_val, na.rm = TRUE), 2),
+      .groups = "drop"
+    )
+}
+
+# ============================================================
+# PLUS / MINUS BY GAME
+# Same logic as compute_plus_minus(), but keeps game_id so you
+# can chart a player's +/- and xG+/- trend across the season.
+# ============================================================
+
+compute_plus_minus_by_game <- function(on_ice, shots) {
+  empty <- data.frame(player_id     = integer(0),
+                      game_id       = integer(0),
+                      plus_minus    = integer(0),
+                      xg_plus_minus = numeric(0))
+  
+  if (is.null(on_ice)  || !is.data.frame(on_ice)  || nrow(on_ice)  == 0) return(empty)
+  if (is.null(shots)   || !is.data.frame(shots)   || nrow(shots)   == 0) return(empty)
+  if (!"shot_id"  %in% names(on_ice)) return(empty)
+  if (!all(c("id", "game_id", "team", "result") %in% names(shots))) return(empty)
+  
+  st_col     <- if ("shot_type" %in% names(shots)) shots$shot_type else rep("wrist", nrow(shots))
+  period_col <- if ("period" %in% names(shots)) shots$period else rep("1", nrow(shots))
+  canon      <- to_canonical_xy(shots$x_coord, shots$y_coord, period_col)
+  
+  shots$xg_pm <- mapply(function(x, y, st, tm) {
+    if (is.na(x) || is.na(y)) return(0)
+    if (tm == "VT") calc_xg(x, y, st) else calc_xg(200 - x, y, st)
+  }, canon$x, canon$y, st_col, shots$team)
+  
+  oi <- on_ice[!is.na(on_ice$shot_id), c("player_id", "shot_id")]
+  s  <- shots[, c("id", "game_id", "team", "result", "xg_pm")]
+  merged <- merge(oi, s, by.x = "shot_id", by.y = "id", all.x = FALSE)
+  if (nrow(merged) == 0) return(empty)
+  
+  merged$pm_val <- dplyr::case_when(
+    merged$result == "goal" & merged$team == "VT"  ~  1L,
+    merged$result == "goal" & merged$team != "VT"  ~ -1L,
+    TRUE                                           ~  0L
+  )
+  merged$xg_val <- ifelse(merged$team == "VT",
+                          tidyr::replace_na(merged$xg_pm, 0),
+                          -tidyr::replace_na(merged$xg_pm, 0))
+  
+  merged |>
+    dplyr::group_by(player_id, game_id) |>
     dplyr::summarise(
       plus_minus    = sum(pm_val,  na.rm = TRUE),
       xg_plus_minus = round(sum(xg_val, na.rm = TRUE), 2),
@@ -207,11 +297,13 @@ compute_goalie_stats <- function(shots, on_ice = data.frame()) {
     dplyr::filter(!is.na(goalie_id)) |>
     dplyr::mutate(
       shot_type_safe = if (has_shot_type) shot_type else "wrist",
-      danger = mapply(function(x, y) classify_danger(200 - x, y), x_coord, y_coord),
+      x_canon = to_canonical_xy(x_coord, y_coord, period)$x,
+      y_canon = to_canonical_xy(x_coord, y_coord, period)$y,
+      danger = mapply(function(x, y) classify_danger(200 - x, y), x_canon, y_canon),
       xga = mapply(function(x, y, st) {
         if (is.na(x) || is.na(y)) return(0)
         calc_xg(200 - x, y, st)
-      }, x_coord, y_coord, shot_type_safe),
+      }, x_canon, y_canon, shot_type_safe),
       saved = result == "save",
       goal_allowed = result == "goal"
     )
@@ -272,6 +364,10 @@ compute_player_stats <- function(players, shots, goals, faceoffs, turnovers,
 
   shot_stats <- if (nrow(shots_vt) > 0) {
     shots_vt |>
+      dplyr::mutate(
+        x_canon = to_canonical_xy(x_coord, y_coord, period)$x,
+        y_canon = to_canonical_xy(x_coord, y_coord, period)$y
+      ) |>
       dplyr::group_by(player_id) |>
       dplyr::summarise(
         shots      = dplyr::n(),
@@ -280,8 +376,8 @@ compute_player_stats <- function(players, shots, goals, faceoffs, turnovers,
         xg_total   = round(sum(xg, na.rm = TRUE), 2),
         xg_per_shot = round(mean(xg, na.rm = TRUE), 3),
         high_danger = sum(
-          !is.na(x_coord) &
-          classify_danger(x_coord, y_coord) == "High Danger",
+          !is.na(x_canon) &
+            classify_danger(x_canon, y_canon) == "High Danger",
           na.rm = TRUE),
         .groups = "drop"
       )
@@ -325,6 +421,17 @@ compute_player_stats <- function(players, shots, goals, faceoffs, turnovers,
       )
   } else data.frame(player_id = integer(0), takeaways = integer(0),
                     giveaways = integer(0))
+  
+  # --- blocked shot stats ---
+  # Counts shots opponents took that this VT player blocked, from
+  # shots.blocked_by_player_id — captured on the Shots form when
+  # team == opponent and result == blocked.
+  block_stats <- if (nrow(shots) > 0 && "blocked_by_player_id" %in% names(shots)) {
+    shots |>
+      dplyr::filter(!is.na(blocked_by_player_id)) |>
+      dplyr::count(blocked_by_player_id, name = "blocks") |>
+      dplyr::rename(player_id = blocked_by_player_id)
+  } else data.frame(player_id = integer(0), blocks = integer(0))
 
   # --- plus/minus stats ---
   pm_stats <- compute_plus_minus(on_ice, shots)
@@ -355,11 +462,12 @@ compute_player_stats <- function(players, shots, goals, faceoffs, turnovers,
     dplyr::left_join(a2,             by = "player_id") |>
     dplyr::left_join(shot_stats,     by = "player_id") |>
     dplyr::left_join(turnover_stats, by = "player_id") |>
+    dplyr::left_join(block_stats,    by = "player_id") |>
     dplyr::left_join(fo_stats,       by = "player_id") |>
     dplyr::left_join(pm_stats,       by = "player_id") |>
     dplyr::mutate(
       dplyr::across(c(goals, a1, a2, shots, goals_shot, on_goal,
-                      high_danger, takeaways, giveaways, fo_total, fo_wins),
+                      high_danger, takeaways, giveaways, blocks, fo_total, fo_wins),
                     ~ tidyr::replace_na(.x, 0L)),
       dplyr::across(c(xg_total, xg_per_shot),
                     ~ tidyr::replace_na(.x, 0.0)),

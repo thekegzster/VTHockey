@@ -2,6 +2,8 @@
 # server.R  -  All reactive logic and data submission
 # ============================================================
 
+options(shiny.fullstacktrace = TRUE)
+
 server <- function(input, output, session) {
 
   # ----------------------------------------------------------
@@ -151,6 +153,7 @@ server <- function(input, output, session) {
     updateSelectizeInput(session, "goal_assist2",
                          choices = c("(none)" = "", players), server = TRUE)
     updateSelectizeInput(session, "on_ice_players", choices = players, server = TRUE)
+    updateSelectizeInput(session, "shot_blocked_by", choices = players, server = TRUE)
 
     # Refresh summary for the newly selected game
     tryCatch(do_refresh_summary(silent = TRUE), error = function(e) NULL)
@@ -372,19 +375,24 @@ server <- function(input, output, session) {
   # RINK PLOT (Shots tab)
   # ----------------------------------------------------------
   output$rink_plot <- renderPlot({
-    # Optionally overlay shots already recorded this game
+    req(input$shot_period)
+    
     shots_data <- NULL
     if (isTRUE(input$show_game_shots) && !is.null(rv$game_id)) {
       shots_data <- tryCatch(
         sb_select("shots",
-                  select  = "x_coord,y_coord,result",
+                  select  = "x_coord,y_coord,result,period",
                   filters = c("game_id" = paste0("eq.", rv$game_id))),
         error = function(e) NULL
       )
+      if (!is.null(shots_data) && nrow(shots_data) > 0 && !is.null(input$shot_period)) {
+        shots_data <- shots_data[shots_data$period == input$shot_period, ]
+      }
     }
     draw_rink(shots_df = shots_data,
               pending_x = rv$pending_shot_x,
-              pending_y = rv$pending_shot_y)
+              pending_y = rv$pending_shot_y,
+              attack_right = vt_attacks_right(input$shot_period))
   })
 
   # ----------------------------------------------------------
@@ -511,6 +519,9 @@ server <- function(input, output, session) {
     disable("btn_submit_shot")
     on.exit(enable("btn_submit_shot"))
 
+    is_blocked_opponent_shot <- !is_vt && !is.null(input$shot_result) &&
+      input$shot_result == "blocked"
+    
     shot_data <- list(
       game_id        = rv$game_id,
       period         = input$shot_period,
@@ -521,13 +532,21 @@ server <- function(input, output, session) {
       } else {
         NULL
       },
-      shot_type      = input$shot_type,
-      result         = input$shot_result,
-      team           = input$shot_team,
-      x_coord        = rv$pending_shot_x,
-      y_coord        = rv$pending_shot_y,
+      shot_type            = input$shot_type,
+      result               = input$shot_result,
+      team                 = input$shot_team,
+      x_coord              = rv$pending_shot_x,
+      y_coord              = rv$pending_shot_y,
+      blocked_by_player_id = if (is_blocked_opponent_shot &&
+                                 !is.null(input$shot_blocked_by) &&
+                                 input$shot_blocked_by != "") {
+        as.integer(input$shot_blocked_by)
+      } else {
+        NULL
+      },
       collector_name = rv$collector_name
     )
+    
     # Remove NULLs so Supabase stores NULL in DB
     shot_data <- Filter(Negate(is.null), shot_data)
 
@@ -551,8 +570,13 @@ server <- function(input, output, session) {
         "Opponent"
       loc_str <- if (!is.null(rv$pending_shot_x))
         paste0(" @ (", rv$pending_shot_x, ",", rv$pending_shot_y, ")") else ""
+      blocker_str <- if (is_blocked_opponent_shot && !is.null(input$shot_blocked_by) &&
+                         input$shot_blocked_by != "") {
+        blocker_name <- names(rv$players[rv$players == input$shot_blocked_by])
+        paste0("  (blocked by ", blocker_name, ")")
+      } else ""
       entry <- paste0(input$shot_period, "P  ", input$shot_time, "  ",
-                      who, "  \u2014 ", input$shot_result, loc_str)
+                      who, "  \u2014 ", input$shot_result, loc_str, blocker_str)
       rv$shot_log <- c(list(entry), rv$shot_log)[1:min(5, length(rv$shot_log) + 1)]
       rv$pending_shot_x <- NULL
       rv$pending_shot_y <- NULL
@@ -871,7 +895,27 @@ server <- function(input, output, session) {
     df <- summary_filtered()$shots
     shots_with_loc <- if (nrow(df) > 0 && "x_coord" %in% names(df))
       df[!is.na(df$x_coord), ] else NULL
-    draw_rink(shots_df = shots_with_loc)
+    
+    is_single_period <- !is.null(input$summary_period_filter) &&
+      input$summary_period_filter != "all"
+    
+    if (is_single_period) {
+      # One real period selected — show shots exactly as recorded,
+      # oriented to that period's actual attack direction.
+      draw_rink(shots_df = shots_with_loc,
+                attack_right = vt_attacks_right(input$summary_period_filter))
+    } else {
+      # "All Periods" — normalize every shot onto one consistent side
+      # since periods 1/2/3 physically attack opposite ends.
+      if (!is.null(shots_with_loc) && nrow(shots_with_loc) > 0) {
+        period_col <- if ("period" %in% names(shots_with_loc))
+          shots_with_loc$period else rep("1", nrow(shots_with_loc))
+        disp <- to_display_xy(shots_with_loc$x_coord, shots_with_loc$y_coord, period_col)
+        shots_with_loc$x_coord <- disp$x
+        shots_with_loc$y_coord <- disp$y
+      }
+      draw_rink(shots_df = shots_with_loc, attack_right = FALSE)
+    }
   })
 
   output$summary_goal_list <- renderUI({
@@ -948,13 +992,18 @@ server <- function(input, output, session) {
       who <- ifelse(sh$team == "VT",
                     sapply(sh$player_id, player_name_lookup, players_df),
                     "Opponent")
+      block_note <- if ("blocked_by_player_id" %in% names(sh)) {
+        sapply(sh$blocked_by_player_id, function(pid) {
+          if (is.na(pid)) "" else paste0(" (blocked by ", player_name_lookup(pid, players_df), ")")
+        })
+      } else rep("", nrow(sh))
       rows[[length(rows) + 1]] <- data.frame(
         created_at  = sh$created_at,
         period      = sh$period,
         game_time   = sh$game_time,
         event       = "Shot",
         description = paste0(who, " \u2014 ", sh$shot_type, " shot, ", sh$result,
-                             " (", sh$team, ")"),
+                             " (", sh$team, ")", block_note),
         stringsAsFactors = FALSE
       )
     }
@@ -1020,12 +1069,13 @@ server <- function(input, output, session) {
         A        = a1 + a2,
         Pts      = points,
         Shots    = shots,
-        `SH%`  = shoot_pct,
+        `Shot%`  = shoot_pct,
         xG       = xg_total,
         `+/-`    = plus_minus,
         `xG+/-`  = xg_plus_minus,
         TA       = takeaways,
         GA       = giveaways,
+        BLK      = blocks,
         `FO%`    = ifelse(is.na(fo_pct), "\u2014", paste0(fo_pct, "%"))
       ) |>
       dplyr::arrange(dplyr::desc(Pts)) |>
@@ -1515,6 +1565,7 @@ server <- function(input, output, session) {
       metric_row("Giveaways", p$giveaways),
       metric_row("TA/GA Ratio",
                  if (!is.na(p$ta_ga_ratio)) p$ta_ga_ratio else paste0(p$takeaways, "/0")),
+      metric_row("Blocked Shots", p$blocks),
       if (p$fo_total > 0)
         metric_row("Faceoff W\u2212L", paste0(p$fo_wins, "\u2212", p$fo_total - p$fo_wins),
                    paste0(p$fo_pct, "% win rate"))
@@ -1585,13 +1636,19 @@ server <- function(input, output, session) {
       }
       if (nrow(s) == 0) return(draw_rink())
       s$result <- ifelse(is.na(s$result), "save", s$result)
+      # Normalize onto one consistent side regardless of which end
+      # VT was actually attacking that period.
+      period_col <- if ("period" %in% names(s)) s$period else rep("1", nrow(s))
+      disp <- to_display_xy(s$x_coord, s$y_coord, period_col)
+      s$x_coord <- disp$x
+      s$y_coord <- disp$y
       s
     }, error = function(e) NULL)
 
     if (is.null(player_shots) || nrow(player_shots) == 0) {
-      draw_rink()
+      draw_rink(attack_right = FALSE)
     } else {
-      draw_rink(shots_df = player_shots)
+      draw_rink(shots_df = player_shots, attack_right = FALSE)
     }
   })
 
@@ -1610,65 +1667,42 @@ server <- function(input, output, session) {
     d        <- analytics_data()
     pid      <- as.integer(input$player_select)
     games_df <- d$games
-
+    
     if (nrow(games_df) == 0) {
       plot.new(); text(0.5, 0.5, "No game data yet", cex = 1.2); return()
     }
-
-    # Points per game
-    g_pts <- if (nrow(d$goals) > 0 && "scorer_id" %in% names(d$goals)) {
-      vg <- dplyr::filter(d$goals, team == "VT", !is.na(team))
-
-      scorer <- vg |> dplyr::filter(!is.na(scorer_id),  scorer_id  == pid) |>
-        dplyr::select(game_id) |> dplyr::mutate(pts = 1L)
-      a1_pts <- vg |> dplyr::filter(!is.na(assist1_id), assist1_id == pid) |>
-        dplyr::select(game_id) |> dplyr::mutate(pts = 1L)
-      a2_pts <- vg |> dplyr::filter(!is.na(assist2_id), assist2_id == pid) |>
-        dplyr::select(game_id) |> dplyr::mutate(pts = 1L)
-
-      dplyr::bind_rows(scorer, a1_pts, a2_pts) |>
-        dplyr::group_by(game_id) |>
-        dplyr::summarise(points = sum(pts), .groups = "drop")
-    } else data.frame(game_id = integer(0), points = integer(0))
-
-    # xG per game
-    g_xg <- if (nrow(d$shots) > 0 && "player_id" %in% names(d$shots)) {
-      ps <- d$shots[d$shots$player_id == pid & !is.na(d$shots$player_id), ]
-      if (nrow(ps) > 0) {
-        ps <- add_xg(ps)
-        ps |> dplyr::group_by(game_id) |>
-          dplyr::summarise(xg = round(sum(xg, na.rm = TRUE), 2), .groups = "drop")
-      } else data.frame(game_id = integer(0), xg = numeric(0))
-    } else data.frame(game_id = integer(0), xg = numeric(0))
-
+    
+    pm_by_game <- compute_plus_minus_by_game(d$on_ice, d$shots)
+    player_pm  <- pm_by_game[pm_by_game$player_id == pid, ]
+    
     trend <- games_df |>
       dplyr::select(game_id = id, game_date, opponent) |>
-      dplyr::left_join(g_pts, by = "game_id") |>
-      dplyr::left_join(g_xg,  by = "game_id") |>
+      dplyr::left_join(player_pm, by = "game_id") |>
       dplyr::mutate(
-        points = tidyr::replace_na(points, 0),
-        xg     = tidyr::replace_na(xg, 0),
-        label  = paste0(substr(opponent, 1, 10))
-      )
-
-    if (max(c(trend$points, trend$xg)) == 0) {
+        plus_minus    = tidyr::replace_na(plus_minus, 0L),
+        xg_plus_minus = tidyr::replace_na(xg_plus_minus, 0),
+        label = substr(opponent, 1, 10)
+      ) |>
+      dplyr::arrange(game_date)
+    
+    if (all(trend$plus_minus == 0) && all(trend$xg_plus_minus == 0)) {
       plot.new()
-      text(0.5, 0.5, "No scoring/shot data for this player yet", cex = 1.1)
+      text(0.5, 0.5, "No on-ice data for this player yet", cex = 1.1)
       return()
     }
-
+    
     ggplot(trend, aes(x = label)) +
-      geom_col(aes(y = points, fill = "Points"), width = 0.4,
+      geom_hline(yintercept = 0, color = "#ccc", linewidth = 0.4) +
+      geom_col(aes(y = plus_minus, fill = "+/-"), width = 0.4,
                position = position_nudge(x = -0.22)) +
-      geom_col(aes(y = xg, fill = "xG"), width = 0.4,
+      geom_col(aes(y = xg_plus_minus, fill = "xG+/-"), width = 0.4,
                position = position_nudge(x = 0.22)) +
-      scale_fill_manual(values = c("Points" = VT_MAROON, "xG" = VT_ORANGE),
-                        name = NULL) +
+      scale_fill_manual(values = c("+/-" = VT_MAROON, "xG+/-" = VT_ORANGE), name = NULL) +
       labs(x = "Opponent", y = "Value") +
       theme_minimal(base_size = 12) +
       theme(
-        legend.position  = "top",
-        axis.text.x      = element_text(angle = 30, hjust = 1),
+        legend.position    = "top",
+        axis.text.x        = element_text(angle = 30, hjust = 1),
         panel.grid.major.x = element_blank()
       )
   })
@@ -1689,7 +1723,8 @@ server <- function(input, output, session) {
     has_faced <- nrow(shots) > 0 && "goalie_id" %in% names(shots)
     
     faced <- if (has_faced) {
-      shots[!is.na(shots$goalie_id) & shots$goalie_id == gid, ]
+      shots[!is.na(shots$goalie_id) & shots$goalie_id == gid &
+              shots$team != "VT" & !is.na(shots$team), ]
     } else {
       shots[0, ]
     }
@@ -1698,9 +1733,8 @@ server <- function(input, output, session) {
       plot.new(); text(0.5, 0.5, "No shots faced by this goalie yet", cex = 1.1); return()
     }
     
-    # xG against — mirror x-coord onto the goalie's own net, same logic as compute_plus_minus
     st_col <- if ("shot_type" %in% names(faced)) faced$shot_type else rep("wrist", nrow(faced))
-    faced$xga <- mapply(function(x, y, st) {
+    faced$xga_shot <- mapply(function(x, y, st) {
       if (is.na(x) || is.na(y)) return(0)
       calc_xg(200 - x, y, st)
     }, faced$x_coord, faced$y_coord, st_col)
@@ -1708,15 +1742,9 @@ server <- function(input, output, session) {
     per_game <- faced |>
       dplyr::group_by(game_id) |>
       dplyr::summarise(
-        shots_against = dplyr::n(),
-        saves         = sum(result == "save",  na.rm = TRUE),
-        goals_against = sum(result == "goal",  na.rm = TRUE),
-        xga           = round(sum(xga, na.rm = TRUE), 2),
+        goals_against = sum(result == "goal", na.rm = TRUE),
+        xga           = round(sum(xga_shot, na.rm = TRUE), 2),
         .groups = "drop"
-      ) |>
-      dplyr::mutate(
-        save_pct = ifelse(shots_against > 0, round(saves / shots_against * 100, 1), NA_real_),
-        gsax     = round(xga - goals_against, 2)   # + = saved more than expected
       )
     
     trend <- games_df |>
@@ -1729,22 +1757,13 @@ server <- function(input, output, session) {
       plot.new(); text(0.5, 0.5, "No shots faced by this goalie yet", cex = 1.1); return()
     }
     
-    # Scale GSAx onto the same axis as save % so both bars are readable together
-    scale_factor <- 10
-    trend$gsax_scaled <- trend$gsax * scale_factor
-    
     ggplot(trend, aes(x = label)) +
-      geom_col(aes(y = save_pct, fill = "Save %"), width = 0.4,
+      geom_col(aes(y = goals_against, fill = "GA"), width = 0.4,
                position = position_nudge(x = -0.22)) +
-      geom_col(aes(y = gsax_scaled, fill = "GSAx"), width = 0.4,
+      geom_col(aes(y = xga, fill = "xGA"), width = 0.4,
                position = position_nudge(x = 0.22)) +
-      scale_fill_manual(values = c("Save %" = VT_MAROON, "GSAx" = VT_ORANGE),
-                        name = NULL) +
-      scale_y_continuous(
-        name = "Save %",
-        sec.axis = sec_axis(~ . / scale_factor, name = "GSAx (Goals Saved Above Expected)")
-      ) +
-      labs(x = "Opponent") +
+      scale_fill_manual(values = c("GA" = VT_MAROON, "xGA" = VT_ORANGE), name = NULL) +
+      labs(x = "Opponent", y = "Goals Against") +
       theme_minimal(base_size = 12) +
       theme(
         legend.position    = "top",
