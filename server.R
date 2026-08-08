@@ -381,7 +381,7 @@ server <- function(input, output, session) {
     if (isTRUE(input$show_game_shots) && !is.null(rv$game_id)) {
       shots_data <- tryCatch(
         sb_select("shots",
-                  select  = "x_coord,y_coord,result,period",
+                  select  = "x_coord,y_coord,result,period,team",
                   filters = c("game_id" = paste0("eq.", rv$game_id))),
         error = function(e) NULL
       )
@@ -1629,7 +1629,9 @@ server <- function(input, output, session) {
           s$team != "VT" & !is.na(s$team) &
             s$goalie_id == as.integer(input$player_select) &
             !is.na(s$goalie_id) &
-            !is.na(s$x_coord),
+            !is.na(s$x_coord) &
+            !is.na(s$result) &
+            s$result %in% c("save", "goal"),
         ]
         
       } else {

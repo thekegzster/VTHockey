@@ -172,30 +172,62 @@ draw_rink <- function(shots_df = NULL, pending_x = NULL, pending_y = NULL,
 
   # --- Plot shots if provided ---
   if (!is.null(shots_df) && is.data.frame(shots_df) && nrow(shots_df) > 0) {
-
-    shot_colors <- c(
-      "goal"    = "#861F41",   # VT maroon
-      "save"    = "#E5751F",   # VT orange
-      "missed"  = "#888888",   # gray
-      "blocked" = "#003087"    # blue
-    )
-    shot_shapes <- c(
-      "goal"    = 8,    # asterisk / star
-      "save"    = 16,   # filled circle
-      "missed"  = 4,    # X
-      "blocked" = 15    # filled square
-    )
-
+    
+    VT_FILL  <- "#861F41"
+    OPP_FILL <- "#1a3a6b"
+    
+    team_col <- if ("team" %in% names(shots_df)) shots_df$team else rep("VT", nrow(shots_df))
+    shots_df$team_fill <- ifelse(!is.na(team_col) & team_col == "VT", VT_FILL, OPP_FILL)
+    
+    result_col <- if ("result" %in% names(shots_df)) shots_df$result else rep("save", nrow(shots_df))
+    
+    saves   <- shots_df[!is.na(result_col) & result_col == "save", ]
+    goals   <- shots_df[!is.na(result_col) & result_col == "goal", ]
+    blocked <- shots_df[!is.na(result_col) & result_col == "blocked", ]
+    missed  <- shots_df[!is.na(result_col) & result_col == "missed", ]
+    
+    # Circle (outlined) = on-goal save; Square (outlined) = blocked;
+    # X = missed; Star = goal. Fill/color always reflects team.
+    if (nrow(saves) > 0) {
+      p <- p + geom_point(data = saves, aes(x = x_coord, y = y_coord),
+                          shape = 21, size = 4, stroke = 1.2,
+                          fill = saves$team_fill, color = "black", alpha = 0.9)
+    }
+    if (nrow(blocked) > 0) {
+      p <- p + geom_point(data = blocked, aes(x = x_coord, y = y_coord),
+                          shape = 22, size = 4, stroke = 1.2,
+                          fill = blocked$team_fill, color = "black", alpha = 0.9)
+    }
+    if (nrow(missed) > 0) {
+      p <- p + geom_point(data = missed, aes(x = x_coord, y = y_coord),
+                          shape = 4, size = 4, stroke = 1.6,
+                          color = missed$team_fill, alpha = 0.9)
+    }
+    if (nrow(goals) > 0) {
+      p <- p + geom_point(data = goals, aes(x = x_coord, y = y_coord),
+                          shape = 8, size = 5, stroke = 2,
+                          color = goals$team_fill, alpha = 0.95)
+    }
+    
+    # Manual legend — since fill/color are set directly per layer rather
+    # than mapped through aes(), ggplot won't auto-generate one.
     p <- p +
-      geom_point(
-        data = shots_df,
-        aes(x = x_coord, y = y_coord, color = result, shape = result),
-        size = 4, stroke = 1.5, alpha = 0.85
-      ) +
-      scale_color_manual(values = shot_colors, name = "Shot result",
-                         drop = FALSE) +
-      scale_shape_manual(values = shot_shapes, name = "Shot result",
-                         drop = FALSE)
+      annotate("point", x = -6,  y = 10, shape = 21, size = 3, stroke = 1,
+               fill = VT_FILL, color = "black") +
+      annotate("text",  x = -1,  y = 10, label = "VT", hjust = 0, size = 3) +
+      annotate("point", x = -6,  y = 4,  shape = 21, size = 3, stroke = 1,
+               fill = OPP_FILL, color = "black") +
+      annotate("text",  x = -1,  y = 4,  label = "Opponent", hjust = 0, size = 3) +
+      annotate("point", x = 55,  y = 10, shape = 8, size = 3, stroke = 1.4, color = "#555") +
+      annotate("text",  x = 60,  y = 10, label = "Goal", hjust = 0, size = 3) +
+      annotate("point", x = 55,  y = 4,  shape = 22, size = 3, stroke = 1,
+               fill = "#888888", color = "black") +
+      annotate("text",  x = 60,  y = 4,  label = "Blocked", hjust = 0, size = 3) +
+      annotate("point", x = 130, y = 10, shape = 4, size = 3, stroke = 1.4, color = "#555") +
+      annotate("text",  x = 135, y = 10, label = "Missed", hjust = 0, size = 3) +
+      annotate("point", x = 130, y = 4,  shape = 21, size = 3, stroke = 1,
+               fill = "#888888", color = "black") +
+      annotate("text",  x = 135, y = 4,  label = "Save", hjust = 0, size = 3)
   }
 
   # --- Show pending click location (yellow crosshair) ---

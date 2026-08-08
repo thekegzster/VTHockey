@@ -31,6 +31,53 @@ if (file.exists("../.env")) readRenviron("../.env")
 source("../R/supabase.R")
 source("../R/rink_plot.R")
 source("../R/analytics.R")
+
+# ── Two-team shot map: VT in maroon, opponent in navy — circles for
+# saves/on-goal, star for goals. Only on-goal results shown (save/goal);
+# missed and blocked shots are excluded from this view.
+draw_rink_both_teams <- function(shots_df, attack_right = TRUE) {
+  base <- draw_rink(attack_right = attack_right)  # rink + danger zones, no shots
+
+  on_goal <- shots_df[!is.na(shots_df$result) &
+                      shots_df$result %in% c("save", "goal"), ]
+
+  vt_saves  <- on_goal[on_goal$team == "VT"  & on_goal$result == "save", ]
+  vt_goals  <- on_goal[on_goal$team == "VT"  & on_goal$result == "goal", ]
+  opp_saves <- on_goal[on_goal$team != "VT"  & !is.na(on_goal$team) & on_goal$result == "save", ]
+  opp_goals <- on_goal[on_goal$team != "VT"  & !is.na(on_goal$team) & on_goal$result == "goal", ]
+
+  VT_FILL  <- "#861F41"
+  OPP_FILL <- "#1a3a6b"
+
+  if (nrow(vt_saves) > 0) {
+    base <- base +
+      geom_point(data = vt_saves, aes(x = x_coord, y = y_coord),
+                shape = 21, size = 4, stroke = 1.2,
+                fill = VT_FILL, color = "black", alpha = 0.9)
+  }
+  if (nrow(opp_saves) > 0) {
+    base <- base +
+      geom_point(data = opp_saves, aes(x = x_coord, y = y_coord),
+                shape = 21, size = 4, stroke = 1.2,
+                fill = OPP_FILL, color = "black", alpha = 0.9)
+  }
+  if (nrow(vt_goals) > 0) {
+    base <- base +
+      geom_point(data = vt_goals, aes(x = x_coord, y = y_coord),
+                shape = 8, size = 5, stroke = 2, color = VT_FILL)
+  }
+  if (nrow(opp_goals) > 0) {
+    base <- base +
+      geom_point(data = opp_goals, aes(x = x_coord, y = y_coord),
+                shape = 8, size = 5, stroke = 2, color = OPP_FILL)
+  }
+
+  base +
+    annotate("point", x = -6, y = -4, shape = 8, size = 3, stroke = 1.5, color = VT_FILL) +
+    annotate("text",  x = -1, y = -4, label = "VT Goal", hjust = 0, size = 3.2) +
+    annotate("point", x = -6, y = -10, shape = 8, size = 3, stroke = 1.5, color = OPP_FILL) +
+    annotate("text",  x = -1, y = -10, label = "Opponent Goal", hjust = 0, size = 3.2)
+}
 ```
 
 ```{r load-data}
@@ -39,11 +86,15 @@ source("../R/analytics.R")
 players  <- sb_select("players",  filters = c("active" = "eq.true"),
                       order = "jersey_num.asc")
 games    <- sb_select("games",    order = "game_date.asc")
-faceoffs  <- sb_select("faceoffs")
-turnovers <- sb_select("turnovers")
-shots     <- sb_select("shots")
-goals    <- sb_select("goals")
-on_ice   <- sb_select("on_ice")
+
+# Unfiltered season-wide data — kept separate so games_played and any
+# per-game rate stat always reflect the whole season, even inside a
+# single-game report, rather than that one game divided by 1.
+faceoffs_all  <- sb_select("faceoffs")
+turnovers_all <- sb_select("turnovers")
+shots_all     <- sb_select("shots")
+goals_all     <- sb_select("goals")
+on_ice_all    <- sb_select("on_ice")
 
 # ── Filter to selected game if a game_id param was passed ──────────────────
 filter_by_game <- function(df) {
@@ -52,14 +103,15 @@ filter_by_game <- function(df) {
   df[df$game_id == as.integer(gid), ]
 }
 
-faceoffs  <- filter_by_game(faceoffs)
-turnovers <- filter_by_game(turnovers)
-shots     <- filter_by_game(shots)
-goals     <- filter_by_game(goals)
-on_ice    <- filter_by_game(on_ice)
+faceoffs  <- filter_by_game(faceoffs_all)
+turnovers <- filter_by_game(turnovers_all)
+shots     <- filter_by_game(shots_all)
+goals     <- filter_by_game(goals_all)
+on_ice    <- filter_by_game(on_ice_all)
 
-# ── Add xG to shots ─────────────────────────────────────────────────────────
-shots <- add_xg(shots)
+# ── Add xG to shots (both the game-scoped and season-wide copies) ──────────
+shots     <- add_xg(shots)
+shots_all <- add_xg(shots_all)
 
 # ── Helper: join player name ─────────────────────────────────────────────────
 add_player_name <- function(df, id_col = "player_id") {
@@ -88,6 +140,7 @@ on_ice <- on_ice |> add_player_name() |> add_game_label()
 
 # ── Compute full player stats table ─────────────────────────────────────────
 n_games_covered <- if (is.null(params$game_id)) nrow(games) else 1L
+
 player_stats <- compute_player_stats(
   players   = players,
   shots     = shots,
@@ -98,9 +151,34 @@ player_stats <- compute_player_stats(
   n_games   = n_games_covered
 )
 
+# Always computed from full, unfiltered season data — used only to source
+# games_played and any *_per_game rate column below, so those reflect the
+# real season even when this report is scoped to a single game.
+player_stats_season <- compute_player_stats(
+  players   = players,
+  shots     = shots_all,
+  goals     = goals_all,
+  faceoffs  = faceoffs_all,
+  turnovers = turnovers_all,
+  on_ice    = on_ice_all,
+  n_games   = nrow(games)
+)
+
+per_game_cols <- c("games_played",
+                   names(player_stats_season)[grepl("_per_game$", names(player_stats_season))])
+
+player_stats <- player_stats |>
+  select(-any_of(per_game_cols)) |>
+  left_join(player_stats_season |> select(player_id, all_of(per_game_cols)),
+            by = "player_id")
+
 vt_goals  <- sum(goals$team == "VT",       na.rm = TRUE)
 opp_goals <- sum(goals$team == "opponent", na.rm = TRUE)
 vt_shots  <- shots[!is.na(shots$team) & shots$team == "VT", ]
+
+# Both teams' shots, in scope for this report (game or season) — used by
+# the combined shot maps below. Keep vt_shots above for VT-only stats.
+all_shots_this_scope <- shots[!is.na(shots$team), ]
 ```
 
 ---
@@ -117,7 +195,7 @@ Data pulled live from Supabase at render time.
 fo_wins  <- sum(faceoffs$result == "win",  na.rm = TRUE)
 fo_total <- nrow(faceoffs)
 cat(sprintf(
-  "Games covered : %d\nScore         : VT %d — Opp %d\nShots         : %d\nFaceoffs      : %d W / %d (%.1f%%)\nTotal Hits    : %d\nTeam xG       : %.2f\n",
+  "Games covered : %d\nScore         : VT %d — Opp %d\nShots         : %d\nFaceoffs      : %d W / %d (%.1f%%)\nTakeaways     : %d\nTeam xG       : %.2f\n",
   n_games_covered, vt_goals, opp_goals,
   nrow(vt_shots), fo_wins, fo_total,
   ifelse(fo_total > 0, fo_wins / fo_total * 100, 0),
@@ -254,6 +332,7 @@ if (nrow(player_stats) == 0) {
       S            = shots,
       `S%`         = shoot_pct,
       `xG`         = xg_total,
+      `xG/GP`       = xg_per_game,
       `xG+/-`      = xg_plus_minus,
       `GAE`        = g_minus_xg,
       `SQ`         = xg_per_shot,
@@ -269,7 +348,7 @@ if (nrow(player_stats) == 0) {
     ) |>
     gt() |>
     tab_header(title = "VT Skater Stats") |>
-    fmt_number(columns = c(xG, GAE, SQ), decimals = 2) |>
+    fmt_number(columns = c(xG, `xG/GP`, GAE, SQ), decimals = 2) |>
     fmt_missing(columns = everything(), missing_text = "—") |>
     data_color(
       columns = `xG`,
@@ -279,7 +358,7 @@ if (nrow(player_stats) == 0) {
     tab_style(style = cell_text(weight = "bold"),
               locations = cells_column_labels()) |>
     cols_align(align = "center",
-               columns = c(GP, G, A1, A2, PTS, `+/-`, S, `S%`, xG, `xG+/-`, GAE,
+               columns = c(GP, G, A1, A2, PTS, `+/-`, S, `S%`, xG, `xG/GP`, `xG+/-`, GAE,
                            SQ, `HD%`, TA, GA, BLK, PPG, PPP, SHG, SHP, `FO%`)) |>
     cols_width(
       `#`     ~ px(40),
@@ -299,7 +378,7 @@ if (nrow(player_stats) == 0) {
 }
 ```
 
-**Column key:** GP = Games Played, G = Goals, A1/A2 = Primary/Secondary Assists, +/- = Plus/Minus, S% = Shooting %, xG = Expected Goals, xG+/- = xG Plus/Minus, GAE = Goals above expected, SQ = Average shot quality (xG/Shot), HD% = High danger shot %, TA = Takeaways, GA = Giveaways, BLK = Blocked Shots, PPG/PPP = Power Play Goals/Points, SHG/SHP = Short Handed Goals/Points, FO% = Faceoff win %
+**Column key:** GP = Games Played, G = Goals, A1/A2 = Primary/Secondary Assists, +/- = Plus/Minus, S% = Shooting %, xG = Expected Goals, xG/G = xG per Game, xG+/- = xG Plus/Minus, GAE = Goals above expected, SQ = Average shot quality (xG/Shot), HD% = High danger shot %, TA = Takeaways, GA = Giveaways, BLK = Blocked Shots, PPG/PPP = Power Play Goals/Points, SHG/SHP = Short Handed Goals/Points, FO% = Faceoff win %
 
 ## Faceoff Leaderboard
 
@@ -356,14 +435,16 @@ if (nrow(turnovers) == 0) {
 ```{r shot-map-all}
 #| echo: false
 #| fig-height: 5
-loc_shots <- vt_shots[!is.na(vt_shots$x_coord), ]
+loc_shots <- all_shots_this_scope[!is.na(all_shots_this_scope$x_coord), ]
 if (nrow(loc_shots) == 0) {
   cat("No shot location data yet.")
 } else {
+  # Normalize both teams' coords onto one consistent display side, same
+  # convention used elsewhere — VT always shown attacking left.
   disp <- to_display_xy(loc_shots$x_coord, loc_shots$y_coord, loc_shots$period)
   loc_shots$x_coord <- disp$x
   loc_shots$y_coord <- disp$y
-  draw_rink(loc_shots, attack_right = FALSE)
+  draw_rink_both_teams(loc_shots, attack_right = FALSE)
 }
 ```
 
@@ -373,19 +454,119 @@ if (nrow(loc_shots) == 0) {
 #| echo: false
 #| fig-height: 5
 
-raw_loc_shots <- vt_shots[!is.na(vt_shots$x_coord), ]
+raw_loc_shots <- all_shots_this_scope[!is.na(all_shots_this_scope$x_coord), ]
+
 if (nrow(raw_loc_shots) > 0) {
   for (per in unique(raw_loc_shots$period)) {
     sub <- raw_loc_shots[raw_loc_shots$period == per, ]
     lbl <- switch(per, "1"="1st Period","2"="2nd Period","3"="3rd Period",
                   "OT"="Overtime", per)
-    p <- draw_rink(sub, attack_right = vt_attacks_right(per)) +
+    p <- draw_rink_both_teams(sub, attack_right = vt_attacks_right(per)) +
       labs(title = lbl) +
       theme(plot.title = element_text(size=14, face="bold", color="#861F41"))
     print(p)
   }
 }
 ```
+
+
+## Goalie Stats
+
+```{r goalie-table}
+#| echo: false
+goalie_stats <- compute_goalie_stats(shots = shots, on_ice = on_ice)
+
+# Season-wide goalie stats, used only to override games_played/GAA/xGAA so
+# a single-game report still shows real season context for those, not
+# that one game's numbers divided by 1.
+goalie_stats_season <- compute_goalie_stats(shots = shots_all, on_ice = on_ice_all)
+
+goalie_stats <- goalie_stats |>
+  select(-any_of(c("games_played", "gaa", "xgaa"))) |>
+  left_join(goalie_stats_season |> select(goalie_id, games_played, gaa, xgaa),
+            by = "goalie_id")
+
+if (nrow(goalie_stats) == 0) {
+  cat("No goalie data recorded yet.")
+} else {
+  goalie_stats |>
+    left_join(players |> select(id, jersey_num, full_name),
+              by = c("goalie_id" = "id")) |>
+    select(
+      `#`        = jersey_num,
+      Goalie     = full_name,
+      GP         = games_played,
+      SA         = shots_against,
+      SV         = saves,
+      GA         = goals_against,
+      `SV%`      = save_pct,
+      GAA        = gaa,
+      xGA        = xg_against,
+      xGAA       = xgaa,
+      GSAx       = gsax,
+      `HD SV%`   = hd_save_pct,
+      `MD SV%`   = md_save_pct,
+      `LD SV%`   = ld_save_pct
+    ) |>
+    arrange(desc(GP)) |>
+    gt() |>
+    tab_header(title = "VT Goalie Stats") |>
+    fmt_number(columns = c(xGA, xGAA, GSAx), decimals = 2) |>
+    fmt_missing(columns = everything(), missing_text = "—") |>
+    data_color(
+      columns = GSAx,
+      palette = c("#d62020","#ffffff","#228B22"),
+      domain  = c(-2, 2)
+    ) |>
+    tab_style(style = cell_text(weight = "bold"),
+              locations = cells_column_labels()) |>
+    cols_align(align = "center",
+               columns = c(GP, SA, SV, GA, `SV%`, GAA, xGA, xGAA, GSAx,
+                           `HD SV%`, `MD SV%`, `LD SV%`)) |>
+    cols_width(
+      `#`     ~ px(40),
+      Goalie  ~ px(140),
+      everything() ~ px(60)
+    ) |>
+    opt_table_font(size = px(12)) |>
+    tab_options(table.width = pct(100))
+}
+```
+
+**Column key:** GP = Games Played, SA = Shots Against, SV = Saves, GA = Goals Against, SV% = Save Percentage, GAA = Goals Against Average (per game), xGA = Expected Goals Against, xGAA = xGA per game, GSAx = Goals Saved Above Expected, HD/MD/LD SV% = Save % by shot danger zone
+
+## Goalie Shot Maps
+
+```{r goalie-shot-maps}
+#| echo: false
+#| fig-height: 5
+opp_shots <- shots[!is.na(shots$team) & shots$team != "VT" &
+                   !is.na(shots$goalie_id) & !is.na(shots$x_coord) &
+                   !is.na(shots$result) & shots$result %in% c("save", "goal"), ]
+
+if (nrow(opp_shots) == 0) {
+  cat("No shots-against location data yet.")
+} else {
+  for (gid in unique(opp_shots$goalie_id)) {
+    g_row <- players[players$id == gid, ]
+    g_label <- if (nrow(g_row) > 0)
+      paste0("#", g_row$jersey_num, " ", g_row$full_name) else paste0("Goalie ", gid)
+
+    sub <- opp_shots[opp_shots$goalie_id == gid, ]
+    # Normalize onto one consistent side, same as the app's personal
+    # goalie shot maps: shots-against always cluster on the right.
+    disp <- to_display_xy(sub$x_coord, sub$y_coord, sub$period)
+    sub$x_coord <- disp$x
+    sub$y_coord <- disp$y
+
+    p <- draw_rink(sub, attack_right = FALSE) +
+      labs(title = g_label) +
+      theme(plot.title = element_text(size = 14, face = "bold", color = "#861F41"))
+    print(p)
+  }
+}
+```
+
 
 ---
 
@@ -477,10 +658,10 @@ if (nrow(player_stats) == 0 || sum(player_stats$shots) == 0) {
 if (nrow(games) == 0) {
   cat("No games yet.")
 } else {
-  all_shots   <- sb_select("shots")
-  all_goals   <- sb_select("goals")
-  all_fo      <- sb_select("faceoffs")
-  all_hits    <- sb_select("turnovers")
+  all_shots     <- sb_select("shots")
+  all_goals     <- sb_select("goals")
+  all_fo        <- sb_select("faceoffs")
+  all_turnovers <- sb_select("turnovers")
 
   if (nrow(all_shots) > 0) all_shots <- add_xg(all_shots)
 
@@ -498,7 +679,7 @@ if (nrow(games) == 0) {
     left_join(all_fo |> filter(result=="win") |>
                 count(game_id, name="FO_W"), by = c("id"="game_id")) |>
     left_join(all_fo |> count(game_id, name="FO_T"), by = c("id"="game_id")) |>
-    left_join(all_hits |> filter(type=="takeaway") |>
+    left_join(all_turnovers |> filter(type=="takeaway") |>
                 count(game_id, name="TAs"), by = c("id"="game_id")) |>
     mutate(across(c(GF,GA,Shots,FO_W,FO_T,TAs), ~replace_na(.x, 0L)),
            xGF    = replace_na(xGF, 0),
