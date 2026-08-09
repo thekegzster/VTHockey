@@ -433,7 +433,7 @@ server <- function(input, output, session) {
                       "  (", input$fo_zone, ")")
       rv$faceoff_log <- c(list(entry), rv$faceoff_log)[1:min(5, length(rv$faceoff_log) + 1)]
       notify_ok("Faceoff recorded!")
-      tryCatch(load_analytics(), error = function(e) NULL)
+      refresh_analytics_partial(c("faceoffs"))
     } else {
       notify_err(result$error)
     }
@@ -487,7 +487,7 @@ server <- function(input, output, session) {
                       "  (", input$to_zone, ")")
       rv$to_log <- c(list(entry), rv$to_log)[1:min(5, length(rv$to_log) + 1)]
       notify_ok(if (input$to_type == "takeaway") "Takeaway recorded!" else "Giveaway recorded.")
-      tryCatch(load_analytics(), error = function(e) NULL)
+      refresh_analytics_partial(c("turnovers"))
     } else {
       notify_err(result$error)
     }
@@ -593,7 +593,7 @@ server <- function(input, output, session) {
       } else {
         notify_ok("Shot recorded!")
       }
-      tryCatch(load_analytics(), error = function(e) NULL)
+      refresh_analytics_partial(c("shots", "goals", "on_ice"))
     } else {
       notify_err(result$error)
     }
@@ -650,10 +650,12 @@ server <- function(input, output, session) {
     jerseys <- c(rv$goalie_jersey, rv$current_jerseys)
     jerseys <- jerseys[nchar(jerseys) > 0]
     if (length(jerseys) == 0) return()
+    
+    rows <- list()
     for (j in jerseys) {
       pid <- jersey_to_id(j)
       if (!is.null(pid)) {
-        sb_insert("on_ice", Filter(Negate(is.null), list(
+        rows[[length(rows) + 1]] <- Filter(Negate(is.null), list(
           game_id        = rv$game_id,
           shot_id        = shot_id,
           period         = input$shot_period,
@@ -661,9 +663,10 @@ server <- function(input, output, session) {
           player_id      = pid,
           team           = "VT",
           collector_name = rv$collector_name
-        )))
+        ))
       }
     }
+    if (length(rows) > 0) sb_insert_many("on_ice", rows)
   }
 
   # ----------------------------------------------------------
@@ -1199,9 +1202,9 @@ server <- function(input, output, session) {
   load_analytics <- function() {
     tryCatch({
       players  <- sb_select("players",
-                           select  = "id,jersey_num,full_name,position,active",
-                           filters = c("active" = "eq.true"),
-                           order   = "jersey_num.asc")
+                            select  = "id,jersey_num,full_name,position,active",
+                            filters = c("active" = "eq.true"),
+                            order   = "jersey_num.asc")
       shots     <- sb_select("shots")
       goals     <- sb_select("goals")
       faceoffs  <- sb_select("faceoffs")
@@ -1218,6 +1221,21 @@ server <- function(input, output, session) {
         games     = games,
         n_games   = max(nrow(games), 1L)
       ))
+    }, error = function(e) NULL)
+  }
+  
+  # Refreshes only the tables a given submission type could have changed,
+  # instead of re-fetching all 7 season tables every time. Much faster
+  # than load_analytics() for the common case of "I just submitted one row."
+  refresh_analytics_partial <- function(tables) {
+    tryCatch({
+      current <- analytics_data()
+      if ("shots" %in% tables)     current$shots     <- sb_select("shots")
+      if ("goals" %in% tables)     current$goals     <- sb_select("goals")
+      if ("faceoffs" %in% tables)  current$faceoffs  <- sb_select("faceoffs")
+      if ("turnovers" %in% tables) current$turnovers <- sb_select("turnovers")
+      if ("on_ice" %in% tables)    current$on_ice    <- sb_select("on_ice", select = "player_id,shot_id,game_id")
+      analytics_data(current)
     }, error = function(e) NULL)
   }
 

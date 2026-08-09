@@ -59,6 +59,28 @@ sb_insert <- function(table, data) {
   })
 }
 
+# ---- Insert multiple records into a table in a single request ----
+# Same as sb_insert but takes a list of row-lists and sends them as
+# one batch POST instead of one request per row.
+
+sb_insert_many <- function(table, rows) {
+  if (length(rows) == 0) return(list(success = TRUE, data = list()))
+  tryCatch({
+    resp <- .sb_base_req(table) |>
+      req_headers("Prefer" = "return=representation") |>
+      req_body_json(rows) |>
+      req_method("POST") |>
+      req_perform()
+    
+    result <- resp_body_json(resp, simplifyVector = TRUE)
+    list(success = TRUE, data = result)
+  }, error = function(e) {
+    message("Supabase batch insert error: ", conditionMessage(e))
+    list(success = FALSE, error = conditionMessage(e))
+  })
+}
+
+
 # ---- Select rows from a table ----
 # 'filters' is a named character vector, e.g. c("game_id" = "eq.5", "active" = "eq.true")
 # Returns a data frame (empty data frame on error)

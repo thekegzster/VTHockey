@@ -9,6 +9,25 @@
 
 library(ggplot2)
 
+# ============================================================
+# Precomputed danger-zone grid, built once when this file is sourced
+# (app startup), not re-derived on every single draw_rink() call.
+# The grid geometry never changes between renders, so recalculating
+# it per-click/per-render was pure wasted work causing UI freezes.
+# ============================================================
+.build_danger_zones_cache <- function(res = 1) {
+  zones <- build_danger_zones(res = res)
+  zones <- zones[zones$zone != "Low Danger", ]
+  
+  center_x <- 100
+  zones_mirror <- zones
+  zones_mirror$x <- 2 * center_x - zones$x
+  
+  dplyr::bind_rows(zones, zones_mirror)
+}
+
+DANGER_ZONES_CACHE <- .build_danger_zones_cache(res = 1)
+
 # ---- Helper: generate x/y points for a circle or arc ----
 .arc_pts <- function(cx, cy, r, from = 0, to = 2 * pi, n = 200) {
   theta <- seq(from, to, length.out = n)
@@ -145,19 +164,12 @@ draw_rink <- function(shots_df = NULL, pending_x = NULL, pending_y = NULL,
     )
   
   # --- Danger zones layer ---
-  zones <- build_danger_zones(res = 1)
-  zones <- zones[zones$zone != "Low Danger", ]
-  
-  center_x <- 100
-  
-  zones_mirror <- zones
-  zones_mirror$x <- 2 * center_x - zones$x
-  
-  zones_all <- dplyr::bind_rows(zones, zones_mirror)
-  
+  # --- Danger zones layer (precomputed once at app startup — see
+  # DANGER_ZONES_CACHE below — instead of rebuilding a 34k-point grid
+  # on every single render, which is what was freezing the rink click). ---
   p <- p +
     geom_raster(
-      data = zones_all,
+      data = DANGER_ZONES_CACHE,
       aes(x = x, y = y, fill = zone),
       alpha = 0.25,
       interpolate = TRUE

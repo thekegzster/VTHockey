@@ -12,8 +12,8 @@ library(ggplot2)
 
 # ---- Load Supabase API and rink drawing helpers ----
 source("R/supabase.R")
-source("R/rink_plot.R")
 source("R/analytics.R")
+source("R/rink_plot.R")
 
 # ---- Load .env file (your Supabase credentials) ----
 # The .env file should look like:
