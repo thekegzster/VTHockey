@@ -5,6 +5,13 @@
 options(shiny.fullstacktrace = TRUE)
 
 server <- function(input, output, session) {
+  
+  # Detect mode from the URL query string (?mode=viewer), same logic ui()
+  # already used to decide which tabs to build.
+  app_mode <- reactive({
+    query <- parseQueryString(session$clientData$url_search)
+    if (!is.null(query$mode) && query$mode == "viewer") "viewer" else "collector"
+  })
 
   # ----------------------------------------------------------
   # SESSION STATE
@@ -726,6 +733,39 @@ server <- function(input, output, session) {
     tryCatch(do_refresh_summary(silent = FALSE), error = function(e)
       notify_err("Could not refresh summary."))
   })
+  
+  # ----------------------------------------------------------
+  # VIEWER MODE: lightweight game picker shown at top of Summary
+  # tab (collector mode instead sets rv$game_id via Setup)
+  # ----------------------------------------------------------
+  output$viewer_game_picker <- renderUI({
+    req(app_mode() == "viewer")
+    div(style = "max-width:400px; margin-bottom:1rem;",
+        selectInput("viewer_game_select", "Select Game", choices = NULL, width = "100%"))
+  })
+  
+  observe({
+    req(app_mode() == "viewer")
+    games <- tryCatch(sb_load_games(), error = function(e) c())
+    updateSelectInput(session, "viewer_game_select", choices = games)
+  })
+  
+  observeEvent(input$viewer_game_select, {
+    req(app_mode() == "viewer", input$viewer_game_select, input$viewer_game_select != "")
+    
+    games <- tryCatch(sb_load_games(), error = function(e) c())
+    rv$game_id    <- as.integer(input$viewer_game_select)
+    rv$game_label <- names(games[games == input$viewer_game_select])
+    rv$setup_done <- TRUE
+    
+    summary_data$faceoffs  <- data.frame()
+    summary_data$turnovers <- data.frame()
+    summary_data$shots     <- data.frame()
+    summary_data$goals     <- data.frame()
+    summary_data$on_ice    <- data.frame()
+    
+    tryCatch(do_refresh_summary(silent = TRUE), error = function(e) NULL)
+  })
 
   # ----------------------------------------------------------
   # SCOREBOARD (top of Summary tab)
@@ -835,12 +875,21 @@ server <- function(input, output, session) {
       has_loc  <- !is.na(shots_df$x_coord) & !is.na(shots_df$y_coord)
       vt_rows  <- shots_df[has_loc & shots_df$team == "VT", ]
       opp_rows <- shots_df[has_loc & shots_df$team != "VT" & !is.na(shots_df$team), ]
-      if (nrow(vt_rows) > 0)
-        hd_vt <- sum(classify_danger(vt_rows$x_coord, vt_rows$y_coord) == "High Danger")
-      if (nrow(opp_rows) > 0)
-        # Mirror x for opponent shots — they attack VT's own net, same convention
-        # used in compute_goalie_stats().
-        hd_opp <- sum(classify_danger(200 - opp_rows$x_coord, opp_rows$y_coord) == "High Danger")
+      
+      period_col_vt <- if ("period" %in% names(vt_rows)) vt_rows$period else rep("1", nrow(vt_rows))
+      period_col_opp <- if ("period" %in% names(opp_rows)) opp_rows$period else rep("1", nrow(opp_rows))
+      
+      if (nrow(vt_rows) > 0) {
+        # Normalize into the canonical "VT attacks right" frame before
+        # classifying — raw coords can sit at either end depending on period.
+        vt_canon <- to_canonical_xy(vt_rows$x_coord, vt_rows$y_coord, period_col_vt)
+        hd_vt <- sum(classify_danger(vt_canon$x, vt_canon$y) == "High Danger")
+      }
+      if (nrow(opp_rows) > 0) {
+        # Same normalization, then mirror onto VT's net (opponent shoots at VT).
+        opp_canon <- to_canonical_xy(opp_rows$x_coord, opp_rows$y_coord, period_col_opp)
+        hd_opp <- sum(classify_danger(200 - opp_canon$x, opp_canon$y) == "High Danger")
+      }
     }
     
     takeaways_vt <- if (nrow(turnovers_df) > 0 && "type" %in% names(turnovers_df))
@@ -1557,7 +1606,12 @@ server <- function(input, output, session) {
                  paste0(p$goals, " goals on ", p$shots, " shots")),
       metric_row("Shots on Goal %", paste0(p$on_goal_pct, "%"),
                  "% of shot attempts that were on goal"),
-      metric_row("High Danger Shots", paste0(p$high_danger, " (", p$hd_pct, "%)")),
+      metric_row("High Danger Shots", p$high_danger,
+                 if (is.na(p$hd_shoot_pct)) "0% shooting" else paste0(p$hd_shoot_pct, "% shooting")),
+      metric_row("Medium Danger Shots", p$medium_danger,
+                 if (is.na(p$md_shoot_pct)) "0% shooting" else paste0(p$md_shoot_pct, "% shooting")),
+      metric_row("Low Danger Shots", p$low_danger,
+                 if (is.na(p$ld_shoot_pct)) "0% shooting" else paste0(p$ld_shoot_pct, "% shooting")),
       metric_row("avg xG per Shot", paste0(round(p$xg_per_shot, 3))),
       metric_row("+/\u2212",
                  paste0(ifelse(p$plus_minus >= 0, "+", ""), p$plus_minus)),

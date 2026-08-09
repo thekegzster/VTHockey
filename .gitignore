@@ -1,6 +1,9 @@
 # Credentials - NEVER commit this
 .env
 
+# App stuff that is not necessary
+rsconnect/
+
 # R artifacts
 .Rhistory
 .RData

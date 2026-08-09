@@ -366,7 +366,8 @@ compute_player_stats <- function(players, shots, goals, faceoffs, turnovers,
     shots_vt |>
       dplyr::mutate(
         x_canon = to_canonical_xy(x_coord, y_coord, period)$x,
-        y_canon = to_canonical_xy(x_coord, y_coord, period)$y
+        y_canon = to_canonical_xy(x_coord, y_coord, period)$y,
+        danger  = ifelse(!is.na(x_canon), classify_danger(x_canon, y_canon), NA_character_)
       ) |>
       dplyr::group_by(player_id) |>
       dplyr::summarise(
@@ -375,17 +376,20 @@ compute_player_stats <- function(players, shots, goals, faceoffs, turnovers,
         on_goal    = sum(result %in% c("goal", "save"), na.rm = TRUE),
         xg_total   = round(sum(xg, na.rm = TRUE), 2),
         xg_per_shot = round(mean(xg, na.rm = TRUE), 3),
-        high_danger = sum(
-          !is.na(x_canon) &
-            classify_danger(x_canon, y_canon) == "High Danger",
-          na.rm = TRUE),
+        high_danger    = sum(danger == "High Danger",   na.rm = TRUE),
+        medium_danger  = sum(danger == "Medium Danger", na.rm = TRUE),
+        low_danger     = sum(danger == "Low Danger",    na.rm = TRUE),
+        hd_goals       = sum(danger == "High Danger"   & result == "goal", na.rm = TRUE),
+        md_goals       = sum(danger == "Medium Danger" & result == "goal", na.rm = TRUE),
+        ld_goals       = sum(danger == "Low Danger"    & result == "goal", na.rm = TRUE),
         .groups = "drop"
       )
   } else {
     data.frame(player_id = integer(0), shots = integer(0),
                goals_shot = integer(0), on_goal = integer(0),
                xg_total = numeric(0), xg_per_shot = numeric(0),
-               high_danger = integer(0))
+               high_danger = integer(0), medium_danger = integer(0), low_danger = integer(0),
+               hd_goals = integer(0), md_goals = integer(0), ld_goals = integer(0))
   }
 
   # --- scoring stats ---
@@ -525,22 +529,23 @@ compute_player_stats <- function(players, shots, goals, faceoffs, turnovers,
     dplyr::left_join(situational_stats, by = "player_id") |>
     dplyr::mutate(
       dplyr::across(c(goals, a1, a2, shots, goals_shot, on_goal,
-                      high_danger, takeaways, giveaways, blocks, fo_total, fo_wins,
+                      high_danger, medium_danger, low_danger,
+                      hd_goals, md_goals, ld_goals,
+                      takeaways, giveaways, blocks, fo_total, fo_wins,
                       pp_goals, pp_points, sh_goals, sh_points),
                     ~ tidyr::replace_na(.x, 0L)),
       dplyr::across(c(xg_total, xg_per_shot),
                     ~ tidyr::replace_na(.x, 0.0)),
       plus_minus    = tidyr::replace_na(plus_minus,    0L),
       xg_plus_minus = tidyr::replace_na(xg_plus_minus, 0.0),
-      # If we're looking at a single game (n_games == 1) and this player
-      # has no on_ice rows for it, they still get credited that 1 game so
-      # a single-game Summary view doesn't show 0 games played for someone
-      # clearly in the game (e.g. no shots were logged while they were on).
       games_played = if (n_games == 1) 1L else tidyr::replace_na(games_played, 0L),
       points      = goals + a1 + a2,
       shoot_pct   = ifelse(shots > 0,  round(goals / shots * 100, 1),  0.0),
       on_goal_pct = ifelse(shots > 0,  round(on_goal / shots * 100, 1), 0.0),
       hd_pct      = ifelse(shots > 0,  round(high_danger / shots * 100, 1), 0.0),
+      hd_shoot_pct = ifelse(high_danger > 0, round(hd_goals / high_danger * 100, 1), NA_real_),
+      md_shoot_pct = ifelse(medium_danger > 0, round(md_goals / medium_danger * 100, 1), NA_real_),
+      ld_shoot_pct = ifelse(low_danger > 0, round(ld_goals / low_danger * 100, 1), NA_real_),
       fo_pct      = ifelse(fo_total > 0, round(fo_wins / fo_total * 100, 1), NA_real_),
       g_minus_xg  = round(goals - xg_total, 2),   # goals above expected
       pts_per_game = round(points / pmax(games_played, 1), 2),
