@@ -26,6 +26,7 @@ library(dplyr)
 library(ggplot2)
 library(gt)
 library(tidyr)
+library(ggrepel)
 
 if (file.exists("../.env")) readRenviron("../.env")
 source("../R/supabase.R")
@@ -625,27 +626,53 @@ if (nrow(player_stats) == 0 || sum(player_stats$shots) == 0) {
 
 ## Shot Quality vs Volume
 
-```{r quality-vs-volume}
+```{r goals-vs-xg-quadrant}
 #| echo: false
-#| fig-height: 5
+#| fig-height: 6.5
+
 if (nrow(player_stats) == 0 || sum(player_stats$shots) == 0) {
   cat("No data yet.")
 } else {
-  player_stats |>
-    filter(shots >= 2) |>
-    mutate(label = paste0("#", jersey_num, " ", gsub(" .*","", full_name))) |>
-    ggplot(aes(x = shots_per_game, y = xg_per_shot, size = xg_total,
-               color = g_minus_xg, label = label)) +
-    geom_point(alpha = 0.8) +
-    geom_text(size = 3, color = "black", vjust = -1, check_overlap = TRUE) +
-    scale_color_gradient2(low = "#d62020", mid = "#f5a623", high = "#1655a2",
-                          midpoint = 0, name = "G−xG") +
-    scale_size_continuous(name = "xG Total", range = c(3, 10)) +
-    labs(title  = "Shot Quality vs Shot Volume",
-         subtitle = "Size = total xG  |  Colour = goals above/below expected",
-         x = "Shots per Game",
-         y = "Avg xG per Shot (Shot Quality)") +
-    theme_minimal(base_size = 12)
+  plot_data <- player_stats |>
+    filter(shots > 0) |>
+    mutate(label = gsub(" .*", "", full_name))  # last name only, like the screenshot
+
+  x_mid <- mean(plot_data$xg_total, na.rm = TRUE)
+  y_mid <- mean(plot_data$goals,    na.rm = TRUE)
+
+  x_max <- max(plot_data$xg_total, na.rm = TRUE) * 1.2
+  y_max <- max(plot_data$goals,    na.rm = TRUE) * 1.2
+
+  ggplot(plot_data, aes(x = xg_total, y = goals)) +
+    # Quadrant divider lines at the team average
+    geom_hline(yintercept = y_mid, color = "#2c3e50", linewidth = 0.6) +
+    geom_vline(xintercept = x_mid, color = "#2c3e50", linewidth = 0.6) +
+
+    # Quadrant labels
+    annotate("text", x = x_mid * 0.15, y = y_max * 0.97,
+             label = "Finisher / Lucky", fontface = "bold", size = 4.5, hjust = 0) +
+    annotate("text", x = x_max * 0.98, y = y_max * 0.97,
+             label = "Sniper", fontface = "bold", size = 4.5, hjust = 1) +
+    annotate("text", x = x_mid * 0.15, y = y_max * 0.03,
+             label = "Bad", fontface = "bold", size = 4.5, hjust = 0) +
+    annotate("text", x = x_max * 0.98, y = y_max * 0.03,
+             label = "No Finish / Unlucky", fontface = "bold", size = 4.5, hjust = 1) +
+
+    # One dot per player, with a non-overlapping name label pinned to it
+    geom_point(color = "#861F41", size = 2.5, alpha = 0.8) +
+    geom_label_repel(
+      aes(label = label),
+      fill = "#861F41", color = "white", fontface = "bold",
+      size = 3.2, label.size = 0, max.overlaps = Inf, seed = 42
+    ) +
+
+    scale_x_continuous(limits = c(0, x_max)) +
+    scale_y_continuous(limits = c(0, y_max)) +
+    labs(title = "Goals vs Expected Goals",
+         subtitle = "Lines mark team-average xG and Goals per player",
+         x = "xGoals", y = "Goals") +
+    theme_minimal(base_size = 13) +
+    theme(panel.grid.minor = element_blank())
 }
 ```
 
