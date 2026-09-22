@@ -1,0 +1,43 @@
+---
+title: "Untitled"
+format: html
+---
+
+```{r}
+library(fastRhockey)
+
+df <- load_nhl_pbp()
+```
+
+```{r}
+library(tidyverse)
+df_filter <- df |> 
+  select(x, y, event_type, secondary_type) |> 
+  filter(event_type == "SHOT" | event_type == "GOAL") |>
+  filter(!is.na(secondary_type)) |>
+  filter(secondary_type != "cradle") |> 
+  mutate(is_goal = ifelse(event_type == "GOAL", 1, 0)) |> 
+  select(-event_type) |> 
+  mutate(abs_x = abs(x), abs_y = abs(y)) |> 
+  mutate(shot_type = case_when(
+    secondary_type == "wrist" ~ 0,
+    secondary_type == "slap" ~ 1,
+    secondary_type == "snap" ~ 2,
+    secondary_type == "backhand" ~ 3,
+    secondary_type == "tip-in" ~ 4,
+    secondary_type == "deflected" ~ 5,
+    secondary_type == "wrap-around" ~ 6,
+    secondary_type == "poke" ~ 7,
+    secondary_type == "bat" ~ 8,
+    secondary_type == "between-legs" ~ 9,
+  )) |> 
+  mutate(x_group = floor(abs_x / 10) * 100,
+         y_group = floor(abs_y/4) * 10,
+         shot_group = shot_type,
+         total_group = x_group + y_group + shot_group) |> 
+  group_by(total_group) |> 
+  summarize(n = n(),
+            total_goals = sum(is_goal),
+            goal_percent = total_goals/n)
+```
+
