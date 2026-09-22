@@ -895,6 +895,24 @@ server <- function(input, output, session) {
       }
     }
     
+    # Save % — VT's save % comes from opponent shots (VT's goalie faces
+    # those); opponent's save % comes from VT shots (their goalie faces
+    # those). Only shots that reached the net (save or goal) count as
+    # shots on goal — missed/blocked shots don't test the goalie at all.
+    vt_save_pct <- NA_real_; opp_save_pct <- NA_real_
+    if (nrow(shots_df) > 0 && all(c("team", "result") %in% names(shots_df))) {
+      vt_shot_rows  <- shots_df[!is.na(shots_df$team) & shots_df$team == "VT", ]
+      opp_shot_rows <- shots_df[!is.na(shots_df$team) & shots_df$team != "VT", ]
+      
+      opp_on_goal <- sum(opp_shot_rows$result %in% c("save", "goal"), na.rm = TRUE)
+      opp_saves   <- sum(opp_shot_rows$result == "save", na.rm = TRUE)
+      vt_save_pct <- if (opp_on_goal > 0) round(opp_saves / opp_on_goal * 100, 1) else NA_real_
+      
+      vt_on_goal   <- sum(vt_shot_rows$result %in% c("save", "goal"), na.rm = TRUE)
+      opp_saves_vt <- sum(vt_shot_rows$result == "save", na.rm = TRUE)
+      opp_save_pct <- if (vt_on_goal > 0) round(opp_saves_vt / vt_on_goal * 100, 1) else NA_real_
+    }
+    
     takeaways_vt <- if (nrow(turnovers_df) > 0 && "type" %in% names(turnovers_df))
       sum(turnovers_df$type == "takeaway", na.rm = TRUE) else 0
     giveaways_vt <- if (nrow(turnovers_df) > 0 && "type" %in% names(turnovers_df))
@@ -937,6 +955,14 @@ server <- function(input, output, session) {
         stat_row("Faceoff %", paste0(fo_pct_vt, "%"), paste0(fo_pct_opp, "%"), fo_pct_vt, fo_pct_opp)
       else
         stat_row("Faceoff %", "\u2014", "\u2014", 50, 50),
+      if (!is.na(vt_save_pct) || !is.na(opp_save_pct))
+        stat_row("Save %",
+                 if (is.na(vt_save_pct)) "\u2014" else paste0(vt_save_pct, "%"),
+                 if (is.na(opp_save_pct)) "\u2014" else paste0(opp_save_pct, "%"),
+                 if (is.na(vt_save_pct)) 50 else vt_save_pct,
+                 if (is.na(opp_save_pct)) 50 else opp_save_pct)
+      else
+        stat_row("Save %", "\u2014", "\u2014", 50, 50),
       div(class = "alert alert-light border mt-3 mb-0", style = "font-size:0.76rem;",
           icon("circle-info"),
           " Takeaways/Giveaways are only tracked for VT players currently.")
