@@ -29,8 +29,8 @@ library(tidyr)
 
 if (file.exists("../.env")) readRenviron("../.env")
 source("../R/supabase.R")
-source("../R/rink_plot.R")
 source("../R/analytics.R")
+source("../R/rink_plot.R")
 
 # ── Two-team shot map: VT in maroon, opponent in navy — circles for
 # saves/on-goal, star for goals. Only on-goal results shown (save/goal);
