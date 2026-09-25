@@ -59,6 +59,25 @@ sb_insert <- function(table, data) {
   })
 }
 
+# ---- Upsert a single record (insert, or update if the key already exists) ----
+# Used for tables like current_line where there's exactly one row per game_id.
+
+sb_upsert <- function(table, data, conflict_col) {
+  tryCatch({
+    resp <- .sb_base_req(paste0(table, "?on_conflict=", conflict_col)) |>
+      req_headers("Prefer" = "resolution=merge-duplicates,return=representation") |>
+      req_body_json(data) |>
+      req_method("POST") |>
+      req_perform()
+    
+    result <- resp_body_json(resp, simplifyVector = TRUE)
+    list(success = TRUE, data = result)
+  }, error = function(e) {
+    message("Supabase upsert error: ", conditionMessage(e))
+    list(success = FALSE, error = conditionMessage(e))
+  })
+}
+
 # ---- Insert multiple records into a table in a single request ----
 # Same as sb_insert but takes a list of row-lists and sends them as
 # one batch POST instead of one request per row.

@@ -256,7 +256,6 @@ server <- function(input, output, session) {
     }
   })
 
-  # Set Line button — store jersey numbers in rv$current_jerseys
   observeEvent(input$btn_set_line, {
     req(rv$setup_done)
     
@@ -266,7 +265,7 @@ server <- function(input, output, session) {
       trimws(as.character(input[[paste0("ice_", i)]] %||% ""))
     }, character(1))
     jerseys <- jerseys[nchar(jerseys) > 0]
-
+    
     if (length(jerseys) == 0 && nchar(goalie) == 0) {
       notify_err("Enter at least one player or goalie.")
       return()
@@ -274,16 +273,61 @@ server <- function(input, output, session) {
     
     rv$current_jerseys <- jerseys
     rv$goalie_jersey   <- goalie
-
+    
+    # Push the line to Supabase so every session watching this game sees it,
+    # not just this browser tab.
+    padded <- c(jerseys, rep("", 5 - length(jerseys)))[1:5]
+    line_row <- list(
+      game_id       = rv$game_id,
+      goalie_jersey = if (nchar(goalie) > 0) goalie else NULL,
+      jersey_1      = if (nchar(padded[1]) > 0) padded[1] else NULL,
+      jersey_2      = if (nchar(padded[2]) > 0) padded[2] else NULL,
+      jersey_3      = if (nchar(padded[3]) > 0) padded[3] else NULL,
+      jersey_4      = if (nchar(padded[4]) > 0) padded[4] else NULL,
+      jersey_5      = if (nchar(padded[5]) > 0) padded[5] else NULL,
+      updated_by    = rv$collector_name
+    )
+    line_row <- Filter(Negate(is.null), line_row)
+    sb_upsert("current_line", line_row, conflict_col = "game_id")
+    
     labels <- vapply(jerseys, function(j) {
       nm <- jersey_to_name(j)
       if (nchar(nm) > 0) nm else paste0("#", j, " (?)")
     }, character(1))
-
+    
     entry <- paste0(format(Sys.time(), "%H:%M"), "  \u2192  ",
                     paste(labels, collapse = "  |  "))
     rv$line_log <- c(list(entry), rv$line_log)[1:min(15, length(rv$line_log) + 1)]
     notify_ok(paste0("Line set: ", paste0("#", jerseys, collapse = " \u2013 ")))
+  })
+  
+  # ----------------------------------------------------------
+  # POLL FOR LINE CHANGES made by anyone else on this game
+  # ----------------------------------------------------------
+  observe({
+    invalidateLater(2000)  # check every 4 seconds
+    req(rv$game_id)
+    
+    row <- tryCatch(
+      sb_select("current_line", filters = c("game_id" = paste0("eq.", rv$game_id))),
+      error = function(e) NULL
+    )
+    if (is.null(row) || nrow(row) == 0) return()
+    
+    row <- row[1, ]
+    new_goalie  <- if (!is.na(row$goalie_jersey)) as.character(row$goalie_jersey) else ""
+    new_jerseys <- c(row$jersey_1, row$jersey_2, row$jersey_3, row$jersey_4, row$jersey_5)
+    new_jerseys <- as.character(new_jerseys[!is.na(new_jerseys)])
+    
+    # Only update (and notify) if something actually changed vs what
+    # this session currently has, to avoid spamming notifications.
+    changed <- !identical(sort(new_jerseys), sort(rv$current_jerseys)) ||
+      !identical(new_goalie, rv$goalie_jersey %||% "")
+    
+    if (changed) {
+      rv$current_jerseys <- new_jerseys
+      rv$goalie_jersey   <- new_goalie
+    }
   })
 
   # Current lineup banner
