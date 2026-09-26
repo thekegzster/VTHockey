@@ -685,12 +685,30 @@ if (nrow(player_stats) == 0 || sum(player_stats$shots) == 0) {
 if (nrow(games) == 0) {
   cat("No games yet.")
 } else {
-  all_shots     <- sb_select("shots")
+    all_shots     <- sb_select("shots")
   all_goals     <- sb_select("goals")
   all_fo        <- sb_select("faceoffs")
   all_turnovers <- sb_select("turnovers")
 
-  if (nrow(all_shots) > 0) all_shots <- add_xg(all_shots)
+  # sb_select() returns a bare zero-column data frame when a table has no
+  # rows at all — backfill missing columns with the correct type so later
+  # joins/filters work the same whether the table is empty or populated.
+  # game_id must be integer to match games$id in the left_join() below.
+  ensure_cols <- function(df, int_cols = character(0), chr_cols = character(0)) {
+    for (col in int_cols) if (!col %in% names(df)) df[[col]] <- integer(0)
+    for (col in chr_cols) if (!col %in% names(df)) df[[col]] <- character(0)
+    df
+  }
+  all_shots     <- ensure_cols(all_shots,     int_cols = "game_id", chr_cols = "team")
+  all_goals     <- ensure_cols(all_goals,     int_cols = "game_id", chr_cols = "team")
+  all_fo        <- ensure_cols(all_fo,        int_cols = "game_id", chr_cols = "result")
+  all_turnovers <- ensure_cols(all_turnovers, int_cols = "game_id", chr_cols = "type")
+
+  if (nrow(all_shots) > 0) {
+    all_shots <- add_xg(all_shots)
+  } else if (!"xg" %in% names(all_shots)) {
+    all_shots$xg <- numeric(0)
+  }
 
   games |>
     left_join(all_goals |> filter(team=="VT") |> count(game_id, name="GF"),

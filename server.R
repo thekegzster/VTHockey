@@ -2088,8 +2088,14 @@ server <- function(input, output, session) {
     }
 
     today <- Sys.Date()
-    upcoming <- sched[as.Date(sched$game_date) >  today, ]
-    past     <- sched[as.Date(sched$game_date) <= today, ]
+    # A game counts as "played" if its date has passed OR it already has
+    # recorded goals — so testing/entering stats for a future-dated game
+    # still shows the live score instead of being stuck on "UPCOMING".
+    has_any_goals <- sched$id %in% (sb_select("goals", select = "game_id")$game_id %||% integer(0))
+    is_played <- as.Date(sched$game_date) <= today | has_any_goals
+    
+    upcoming <- sched[!is_played, ]
+    past     <- sched[is_played, ]
 
     # Build sections
     upcoming_section <- if (nrow(upcoming) > 0) {
@@ -2112,11 +2118,17 @@ server <- function(input, output, session) {
   })
 
   # -- Create an observer for each game report button (dynamic) --
+  # -- Create an observer for each game report button (dynamic) --
   observe({
     sched <- schedule_data()
     req(nrow(sched) > 0)
-    past_ids <- sched$id[as.Date(sched$game_date) <= Sys.Date()]
-
+    
+    # Must match the same "played" definition used in output$schedule_cards,
+    # or a game showing a real score there won't have had its report
+    # button observer created here — making the click do nothing.
+    has_any_goals <- sched$id %in% (sb_select("goals", select = "game_id")$game_id %||% integer(0))
+    past_ids <- sched$id[as.Date(sched$game_date) <= Sys.Date() | has_any_goals]
+    
     lapply(past_ids, function(gid) {
       local({
         local_gid <- gid
