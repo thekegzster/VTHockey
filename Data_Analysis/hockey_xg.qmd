@@ -5,39 +5,59 @@ format: html
 
 ```{r}
 library(fastRhockey)
-
-df <- load_nhl_pbp()
+library(tidyverse)
 ```
 
 ```{r}
-library(tidyverse)
-df_filter <- df |> 
-  select(x, y, event_type, secondary_type) |> 
-  filter(event_type == "SHOT" | event_type == "GOAL") |>
-  filter(!is.na(secondary_type)) |>
-  filter(secondary_type != "cradle") |> 
-  mutate(is_goal = ifelse(event_type == "GOAL", 1, 0)) |> 
-  select(-event_type) |> 
-  mutate(abs_x = abs(x), abs_y = abs(y)) |> 
-  mutate(shot_type = case_when(
-    secondary_type == "wrist" ~ 0,
-    secondary_type == "slap" ~ 1,
-    secondary_type == "snap" ~ 2,
-    secondary_type == "backhand" ~ 3,
-    secondary_type == "tip-in" ~ 4,
-    secondary_type == "deflected" ~ 5,
-    secondary_type == "wrap-around" ~ 6,
-    secondary_type == "poke" ~ 7,
-    secondary_type == "bat" ~ 8,
-    secondary_type == "between-legs" ~ 9,
-  )) |> 
-  mutate(x_group = floor(abs_x / 10) * 100,
-         y_group = floor(abs_y/4) * 10,
-         shot_group = shot_type,
-         total_group = x_group + y_group + shot_group) |> 
-  group_by(total_group) |> 
-  summarize(n = n(),
-            total_goals = sum(is_goal),
-            goal_percent = total_goals/n)
+df <- load_nhl_pbp(seasons = 2021:2025)
 ```
 
+```{r}
+xg_lookup_table <- df |>
+  select(x, y, event_type, secondary_type) |>
+  filter(event_type == "SHOT" | event_type == "GOAL") |>
+  filter(!is.na(secondary_type)) |>
+  filter(secondary_type != "cradle") |>
+  mutate(is_goal = ifelse(event_type == "GOAL", 1, 0)) |>
+  select(-event_type) |>
+  mutate(abs_x = abs(x), abs_y = abs(y)) |>
+  mutate(shot_type = case_when(
+    secondary_type == "wrist"        ~ 0,
+    secondary_type == "slap"         ~ 1,
+    secondary_type == "snap"         ~ 2,
+    secondary_type == "backhand"     ~ 3,
+    secondary_type == "tip-in"       ~ 4,
+    secondary_type == "deflected"    ~ 5,
+    secondary_type == "wrap-around"  ~ 6,
+    secondary_type == "poke"         ~ 7,
+    secondary_type == "bat"          ~ 8,
+    secondary_type == "between-legs" ~ 9,
+  )) |>
+  mutate(x_group = floor(abs_x / 10) * 100,
+         y_group = floor(abs_y / 4) * 10,
+         shot_group = shot_type,
+         total_group = x_group + y_group + shot_group) |>
+  group_by(total_group, x_group, y_group, shot_group) |>
+  summarize(n = n(),
+            total_goals = sum(is_goal),
+            goal_percent = total_goals / n,
+            .groups = "drop")
+
+saveRDS(xg_lookup_table, "C:/Users/Tyler/Documents/VT Hockey/VTHockey-master/VTHockey-master/R/xg_lookup_table.rds")
+
+# Recheck sparsity with the bigger pooled dataset
+sum(xg_lookup_table$n < 15) / nrow(xg_lookup_table)
+```
+
+```{r}
+new_table <- readRDS("C:/Users/Tyler/Documents/VT Hockey/VTHockey-master/VTHockey-master/R/xg_lookup_table.rds")
+sum(new_table$n < 15) / nrow(new_table)
+
+used_codes <- c(0, 1, 2, 3, 4)  # wrist, slap, snap, backhand, tip-in
+
+relevant_bins <- new_table[new_table$shot_group %in% used_codes, ]
+
+sum(relevant_bins$n < 15) / nrow(relevant_bins)
+nrow(relevant_bins)
+sum(relevant_bins$n)
+```

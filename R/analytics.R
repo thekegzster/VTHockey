@@ -81,11 +81,58 @@ add_xg <- function(df) {
   st_col     <- if ("shot_type" %in% names(df)) df$shot_type else rep("wrist", nrow(df))
   period_col <- if ("period" %in% names(df)) df$period else rep("1", nrow(df))
   canon      <- to_canonical_xy(df$x_coord, df$y_coord, period_col)
-  df$xg <- mapply(calc_xg,
+  df$xg <- mapply(calc_xg_empirical,
                   x         = canon$x,
                   y         = canon$y,
                   shot_type = st_col)
   df
+}
+
+# ============================================================
+# EMPIRICAL xG MODEL (from real NHL play-by-play data, pooled
+# across multiple seasons)
+# Looks up a shot's expected-goal probability from a lookup
+# table binned by distance-from-net, lateral position, and
+# shot type. Falls back to the hand-tuned logistic model
+# (calc_xg) for location/shot-type bins with too few real
+# samples to trust, rather than a flat league-average number.
+# ============================================================
+
+XG_LOOKUP <- readRDS("R/xg_lookup_table.rds")
+
+# Maps this app's shot_type strings to the numeric codes used when the
+# lookup table was built. "other" has no clean NHL equivalent, so it
+# falls back to "wrist" (the most common/neutral category).
+.shot_type_to_code <- function(shot_type) {
+  dplyr::case_when(
+    shot_type == "wrist"    ~ 0,
+    shot_type == "slap"     ~ 1,
+    shot_type == "snap"     ~ 2,
+    shot_type == "backhand" ~ 3,
+    shot_type == "tip"      ~ 4,
+    TRUE                    ~ 0   # "other" and anything unmapped -> wrist
+  )
+}
+
+calc_xg_empirical <- function(x, y, shot_type = "wrist") {
+  if (is.null(x) || is.null(y) || is.na(x) || is.na(y)) return(NA_real_)
+  
+  abs_x <- abs(x - 100)
+  abs_y <- abs(y - 42.5)
+  shot_code <- .shot_type_to_code(shot_type)
+  
+  x_group <- floor(abs_x / 10) * 100
+  y_group <- floor(abs_y / 4) * 10
+  
+  match_row <- XG_LOOKUP[XG_LOOKUP$x_group == x_group &
+                           XG_LOOKUP$y_group == y_group &
+                           XG_LOOKUP$shot_group == shot_code, ]
+  
+  if (nrow(match_row) == 1 && match_row$n >= 15) {
+    match_row$goal_percent[1]
+  } else {
+    calc_xg(x, y, shot_type)   # fall back to hand-tuned model for thin bins
+  }
 }
 
 # ============================================================
@@ -157,8 +204,8 @@ compute_plus_minus <- function(on_ice, shots) {
   
   shots$xg_pm <- mapply(function(x, y, st, tm) {
     if (is.na(x) || is.na(y)) return(0)
-    if (tm == "VT") calc_xg(x,       y, st)
-    else            calc_xg(200 - x, y, st)   # mirror to opponent net
+    if (tm == "VT") calc_xg_empirical(x,       y, st)
+    else            calc_xg_empirical(200 - x, y, st)
   }, canon$x, canon$y, st_col, tm_col)
 
   # Join on_ice → shots on shot_id
@@ -208,7 +255,7 @@ compute_plus_minus_by_game <- function(on_ice, shots) {
   
   shots$xg_pm <- mapply(function(x, y, st, tm) {
     if (is.na(x) || is.na(y)) return(0)
-    if (tm == "VT") calc_xg(x, y, st) else calc_xg(200 - x, y, st)
+    if (tm == "VT") calc_xg_empirical(x, y, st) else calc_xg_empirical(200 - x, y, st)
   }, canon$x, canon$y, st_col, shots$team)
   
   oi <- on_ice[!is.na(on_ice$shot_id), c("player_id", "shot_id")]
@@ -302,7 +349,7 @@ compute_goalie_stats <- function(shots, on_ice = data.frame()) {
       danger = mapply(function(x, y) classify_danger(200 - x, y), x_canon, y_canon),
       xga = mapply(function(x, y, st) {
         if (is.na(x) || is.na(y)) return(0)
-        calc_xg(200 - x, y, st)
+        calc_xg_empirical(200 - x, y, st)
       }, x_canon, y_canon, shot_type_safe),
       saved = result == "save",
       goal_allowed = result == "goal"
