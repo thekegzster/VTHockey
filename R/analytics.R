@@ -98,7 +98,18 @@ add_xg <- function(df) {
 # samples to trust, rather than a flat league-average number.
 # ============================================================
 
-XG_LOOKUP <- readRDS("R/xg_lookup_table.rds")
+# Resolve the lookup table's path relative to THIS file's own location,
+# not the caller's working directory — so this works whether analytics.R
+# is sourced from the Shiny app (root) or the Quarto report (Data_Analysis/).
+.xg_lookup_path <- local({
+  candidates <- c("R/xg_lookup_table.rds", "../R/xg_lookup_table.rds")
+  found <- candidates[file.exists(candidates)]
+  if (length(found) == 0) {
+    stop("Could not locate xg_lookup_table.rds from working directory: ", getwd())
+  }
+  found[1]
+})
+XG_LOOKUP <- readRDS(.xg_lookup_path)
 
 # Maps this app's shot_type strings to the numeric codes used when the
 # lookup table was built. "other" has no clean NHL equivalent, so it
