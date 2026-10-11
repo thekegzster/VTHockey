@@ -410,7 +410,7 @@ collector_tabs <- list(
             div(
               class = "text-center mb-4",
               tags$h6(
-                "Goalie",
+                "Goalie (leave blank if pulled)",
                 class = "fw-bold mb-2",
                 style = paste0("color:", VT_MAROON, ";")
               ),
@@ -430,14 +430,14 @@ collector_tabs <- list(
             ),
             
             tags$h6(
-              "Skaters",
+              "Skaters (leave unused boxes blank)",
               class = "fw-bold text-center mb-2",
               style = paste0("color:", VT_MAROON, ";")
             ),
             
             div(
-              class = "d-flex gap-3 justify-content-center mb-1",
-              lapply(1:5, function(i) {
+              class = "d-flex flex-wrap gap-3 justify-content-center mb-1",
+              lapply(1:6, function(i) {
                 div(
                   class = "text-center",
                   tags$input(

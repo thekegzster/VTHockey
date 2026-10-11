@@ -223,7 +223,7 @@ server <- function(input, output, session) {
   }
 
   # Render player name label under each jersey box
-  lapply(1:5, function(i) {
+  lapply(1:6, function(i) {
     local({
       li <- i
       output[[paste0("ice_lbl_", li)]] <- renderUI({
@@ -261,7 +261,7 @@ server <- function(input, output, session) {
     
     goalie <- trimws(as.character(input$ice_goalie %||% ""))
     
-    jerseys <- vapply(1:5, function(i) {
+    jerseys <- vapply(1:6, function(i) {
       trimws(as.character(input[[paste0("ice_", i)]] %||% ""))
     }, character(1))
     jerseys <- jerseys[nchar(jerseys) > 0]
@@ -274,21 +274,27 @@ server <- function(input, output, session) {
     rv$current_jerseys <- jerseys
     rv$goalie_jersey   <- goalie
     
-    # Push the line to Supabase so every session watching this game sees it,
-    # not just this browser tab.
-    padded <- c(jerseys, rep("", 5 - length(jerseys)))[1:5]
+    # Blank slots are sent as explicit NULLs (not dropped), so the upsert
+    # actually CLEARS players who came off and a goalie who was pulled.
+    padded <- c(jerseys, rep("", max(0, 6 - length(jerseys))))[1:6]
+    blank_to_null <- function(x) if (nchar(x) > 0) x else NULL
+    
     line_row <- list(
       game_id       = rv$game_id,
-      goalie_jersey = if (nchar(goalie) > 0) goalie else NULL,
-      jersey_1      = if (nchar(padded[1]) > 0) padded[1] else NULL,
-      jersey_2      = if (nchar(padded[2]) > 0) padded[2] else NULL,
-      jersey_3      = if (nchar(padded[3]) > 0) padded[3] else NULL,
-      jersey_4      = if (nchar(padded[4]) > 0) padded[4] else NULL,
-      jersey_5      = if (nchar(padded[5]) > 0) padded[5] else NULL,
+      goalie_jersey = blank_to_null(goalie),
+      jersey_1      = blank_to_null(padded[1]),
+      jersey_2      = blank_to_null(padded[2]),
+      jersey_3      = blank_to_null(padded[3]),
+      jersey_4      = blank_to_null(padded[4]),
+      jersey_5      = blank_to_null(padded[5]),
+      jersey_6      = blank_to_null(padded[6]),
       updated_by    = rv$collector_name
     )
-    line_row <- Filter(Negate(is.null), line_row)
-    sb_upsert("current_line", line_row, conflict_col = "game_id")
+    # NOTE: deliberately no Filter(Negate(is.null), ...) here.
+    upsert_result <- sb_upsert("current_line", line_row, conflict_col = "game_id")
+    if (!upsert_result$success) {
+      notify_err(paste("Line not saved to shared state:", upsert_result$error))
+    }
     
     labels <- vapply(jerseys, function(j) {
       nm <- jersey_to_name(j)
@@ -298,14 +304,17 @@ server <- function(input, output, session) {
     entry <- paste0(format(Sys.time(), "%H:%M"), "  \u2192  ",
                     paste(labels, collapse = "  |  "))
     rv$line_log <- c(list(entry), rv$line_log)[1:min(15, length(rv$line_log) + 1)]
-    notify_ok(paste0("Line set: ", paste0("#", jerseys, collapse = " \u2013 ")))
+    
+    status <- paste0(length(jerseys), " skaters",
+                     if (nchar(goalie) == 0) " (goalie pulled)" else "")
+    notify_ok(paste0("Line set: ", status))
   })
   
   # ----------------------------------------------------------
   # POLL FOR LINE CHANGES made by anyone else on this game
   # ----------------------------------------------------------
   observe({
-    invalidateLater(2000)  # check every 4 seconds
+    invalidateLater(2000)
     req(rv$game_id)
     
     row <- tryCatch(
@@ -313,14 +322,18 @@ server <- function(input, output, session) {
       error = function(e) NULL
     )
     if (is.null(row) || nrow(row) == 0) return()
-    
     row <- row[1, ]
-    new_goalie  <- if (!is.na(row$goalie_jersey)) as.character(row$goalie_jersey) else ""
-    new_jerseys <- c(row$jersey_1, row$jersey_2, row$jersey_3, row$jersey_4, row$jersey_5)
-    new_jerseys <- as.character(new_jerseys[!is.na(new_jerseys)])
     
-    # Only update (and notify) if something actually changed vs what
-    # this session currently has, to avoid spamming notifications.
+    # Cleared slots can come back as NA or as a missing column entirely
+    # (goalie pulled, only 4 skaters), so read every field defensively.
+    get_jersey <- function(col) {
+      if (col %in% names(row) && !is.na(row[[col]])) as.character(row[[col]]) else ""
+    }
+    
+    new_goalie  <- get_jersey("goalie_jersey")
+    new_jerseys <- unname(vapply(paste0("jersey_", 1:6), get_jersey, character(1)))
+    new_jerseys <- new_jerseys[nchar(new_jerseys) > 0]
+    
     changed <- !identical(sort(new_jerseys), sort(rv$current_jerseys)) ||
       !identical(new_goalie, rv$goalie_jersey %||% "")
     
@@ -362,7 +375,7 @@ server <- function(input, output, session) {
           tags$span(style = "font-size:0.78rem; opacity:0.8;",
                     paste0(length(jerseys), " players"))
       ),
-      div(class = "d-flex gap-3 justify-content-center", circles)
+      div(class = "d-flex flex-wrap gap-3 justify-content-center", circles)
     )
   })
 
