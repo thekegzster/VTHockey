@@ -33,6 +33,10 @@ source("../R/supabase.R")
 source("../R/analytics.R")
 source("../R/rink_plot.R")
 
+# Brand colors (defined in global.R for the app, which the report never loads)
+VT_MAROON <- "#861F41"
+VT_ORANGE <- "#E5751F"
+
 # ── Two-team shot map: VT in maroon, opponent in navy — circles for
 # saves/on-goal, star for goals. Only on-goal results shown (save/goal);
 # missed and blocked shots are excluded from this view.
