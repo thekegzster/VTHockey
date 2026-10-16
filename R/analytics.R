@@ -408,7 +408,8 @@ compute_goalie_stats <- function(shots, on_ice = data.frame()) {
 
 
 compute_player_stats <- function(players, shots, goals, faceoffs, turnovers,
-                                 on_ice = data.frame(), n_games = 1) {
+                                 on_ice = data.frame(), n_games = 1,
+                                 penalties = data.frame()) {
 
   # guard: ensure required columns exist even on empty frames
   safe_nrow <- function(df) if (is.null(df) || nrow(df) == 0) 0L else nrow(df)
@@ -538,6 +539,23 @@ compute_player_stats <- function(players, shots, goals, faceoffs, turnovers,
       dplyr::rename(player_id = blocked_by_player_id)
   } else data.frame(player_id = integer(0), blocks = integer(0))
 
+  
+  # --- penalty minutes (individual) ---
+  # Only penalties charged to a specific VT player. Bench minors have no
+  # player_id, so they appear in team PIM but in nobody's individual total.
+  pim_stats <- if (!is.null(penalties) && nrow(penalties) > 0 &&
+                   all(c("team", "player_id", "minutes") %in% names(penalties))) {
+    penalties |>
+      dplyr::filter(!is.na(team), team == "VT", !is.na(player_id)) |>
+      dplyr::group_by(player_id) |>
+      dplyr::summarise(
+        pim             = sum(minutes, na.rm = TRUE),
+        penalties_taken = dplyr::n(),
+        .groups = "drop"
+      )
+  } else data.frame(player_id = integer(0), pim = integer(0),
+                    penalties_taken = integer(0))
+  
   # --- plus/minus stats ---
   pm_stats <- compute_plus_minus(on_ice, shots)
 
@@ -585,12 +603,14 @@ compute_player_stats <- function(players, shots, goals, faceoffs, turnovers,
     dplyr::left_join(pm_stats,       by = "player_id") |>
     dplyr::left_join(games_played_df, by = "player_id") |>
     dplyr::left_join(situational_stats, by = "player_id") |>
+    dplyr::left_join(pim_stats,         by = "player_id") |>
     dplyr::mutate(
       dplyr::across(c(goals, a1, a2, shots, goals_shot, on_goal,
                       high_danger, medium_danger, low_danger,
                       hd_goals, md_goals, ld_goals,
-                      takeaways, giveaways, blocks, fo_total, fo_wins,
-                      pp_goals, pp_points, sh_goals, sh_points),
+                      takeaways, giveaways, blocks, fo_total, 
+                      fo_wins, pp_goals, pp_points, sh_goals, sh_points,
+                      pim, penalties_taken),
                     ~ tidyr::replace_na(.x, 0L)),
       dplyr::across(c(xg_total, xg_per_shot),
                     ~ tidyr::replace_na(.x, 0.0)),
@@ -614,7 +634,8 @@ compute_player_stats <- function(players, shots, goals, faceoffs, turnovers,
       ta_ga_ratio        = ifelse(giveaways > 0,
                                   round(takeaways / giveaways, 2),
                                   NA_real_),
-      net_turnovers      = takeaways - giveaways
+      net_turnovers      = takeaways - giveaways,
+      pim_per_game       = round(pim / pmax(games_played, 1), 2),
     ) |>
     dplyr::arrange(dplyr::desc(points), dplyr::desc(goals))
   
@@ -661,5 +682,104 @@ pct_bar <- function(label, value_label, pct) {
         tags$b(label),
         tags$span(style = "color:#555; margin-left:6px; font-style:italic;",
                   value_label))
+  )
+}
+
+
+# ============================================================
+# PENALTIES (PIM)
+# Times follow NCAA/ACHA Rules 16-23. Dropdown groupings are for
+# convenience only.
+# ============================================================
+
+PENALTY_INFRACTIONS <- list(
+  "Physical Fouls" = c(
+    "Boarding"            = "boarding",
+    "Charging"            = "charging",
+    "Clipping"            = "clipping",
+    "Contact to the Head" = "contact_head",
+    "Elbowing"            = "elbowing",
+    "Fighting"            = "fighting",
+    "Hitting from Behind" = "hitting_behind",
+    "Kneeing"             = "kneeing",
+    "Roughing"            = "roughing"
+  ),
+  "Restraining Fouls" = c(
+    "Holding"      = "holding",
+    "Hooking"      = "hooking",
+    "Interference" = "interference",
+    "Obstruction"  = "obstruction",
+    "Tripping"     = "tripping"
+  ),
+  "Stick Fouls" = c(
+    "Butt-Ending"            = "butt_ending",
+    "Cross-Checking"         = "cross_checking",
+    "Grasping the Face Mask" = "face_mask",
+    "High-Sticking"          = "high_sticking",
+    "Holding the Stick"      = "holding_stick",
+    "Slashing"               = "slashing",
+    "Spearing"               = "spearing"
+  ),
+  "Other Fouls" = c(
+    "Abuse of Officials"      = "abuse_officials",
+    "Delay of Game"           = "delay_of_game",
+    "Goalkeeper Infraction"   = "goalkeeper_infraction",
+    "Illegal Equipment"       = "illegal_equipment",
+    "Throwing Object on Ice"  = "throwing_object",
+    "Too Many Players on Ice" = "too_many_players",
+    "Unsportsmanlike Conduct" = "unsportsmanlike",
+    "Other"                   = "other"
+  )
+)
+
+PENALTY_CLASS_CHOICES <- c(
+  "Minor (2 min)"                       = "minor",
+  "Bench minor (2 min, charged to team)" = "bench_minor",
+  "Double minor (4 min)"                = "double_minor",
+  "Major (5 min)"                       = "major",
+  "Minor + game misconduct (2 min)"     = "minor_gm",
+  "Major + game misconduct (5 min)"     = "major_gm",
+  "Misconduct (10 min)"                 = "misconduct",
+  "Game misconduct (ejection only)"     = "game_misconduct",
+  "Disqualification (5 min + ejection)" = "disqualification"
+)
+
+# Default minutes per type. The Penalties tab box stays editable.
+PENALTY_CLASS_MINUTES <- c(
+  minor = 2, bench_minor = 2, double_minor = 4, major = 5,
+  minor_gm = 2, major_gm = 5, misconduct = 10,
+  game_misconduct = 0, disqualification = 5
+)
+
+PENALTY_CLASS_SHORT <- c(
+  minor = "Minor", bench_minor = "Bench minor", double_minor = "Double minor",
+  major = "Major", minor_gm = "Minor + GM", major_gm = "Major + GM",
+  misconduct = "Misconduct", game_misconduct = "Game misconduct",
+  disqualification = "DQ"
+)
+
+penalty_infraction_label <- function(code) {
+  lookup <- unlist(unname(PENALTY_INFRACTIONS))
+  out <- names(lookup)[match(code, lookup)]
+  ifelse(is.na(out), as.character(code), out)
+}
+
+penalty_class_short <- function(code) {
+  out <- unname(PENALTY_CLASS_SHORT[as.character(code)])
+  ifelse(is.na(out), as.character(code), out)
+}
+
+# Team-level PIM and penalty counts (includes bench minors)
+sum_pim_by_team <- function(penalties) {
+  zero <- list(vt = 0, opp = 0, vt_n = 0L, opp_n = 0L)
+  if (is.null(penalties) || !is.data.frame(penalties) || nrow(penalties) == 0 ||
+      !all(c("team", "minutes") %in% names(penalties))) return(zero)
+  is_vt  <- !is.na(penalties$team) & penalties$team == "VT"
+  is_opp <- !is.na(penalties$team) & penalties$team != "VT"
+  list(
+    vt    = sum(penalties$minutes[is_vt],  na.rm = TRUE),
+    opp   = sum(penalties$minutes[is_opp], na.rm = TRUE),
+    vt_n  = sum(is_vt),
+    opp_n = sum(is_opp)
   )
 }

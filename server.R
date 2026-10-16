@@ -33,12 +33,14 @@ server <- function(input, output, session) {
     to_log      = list(),
     shot_log    = list(),
     goal_log    = list(),
+    pen_log     = list(),
 
     # Most recent record id for each table (for undo)
     last_faceoff_id = NULL,
     last_to_id      = NULL,
     last_shot_id    = NULL,
     last_goal_id    = NULL,
+    last_pen_id     = NULL,
 
     # On Ice tab: current line (jersey numbers as strings) + change log
     current_jerseys = character(0),
@@ -133,6 +135,8 @@ server <- function(input, output, session) {
     rv$last_to_id       <- NULL
     rv$last_shot_id     <- NULL
     rv$last_goal_id     <- NULL
+    rv$pen_log          <- list()
+    rv$last_pen_id      <- NULL
     rv$current_jerseys  <- character(0)
     rv$goalie_jersey    <- NULL
     rv$line_log         <- list()
@@ -145,6 +149,7 @@ server <- function(input, output, session) {
     summary_data$shots     <- data.frame()
     summary_data$goals     <- data.frame()
     summary_data$on_ice    <- data.frame()
+    summary_data$penalties <- data.frame()
 
     # Load player roster from Supabase
     players <- sb_load_players()
@@ -161,6 +166,7 @@ server <- function(input, output, session) {
                          choices = c("(none)" = "", players), server = TRUE)
     updateSelectizeInput(session, "on_ice_players", choices = players, server = TRUE)
     updateSelectizeInput(session, "shot_blocked_by", choices = players, server = TRUE)
+    updateSelectizeInput(session, "pen_player", choices = players, server = TRUE)
 
     # Refresh summary for the newly selected game
     tryCatch(do_refresh_summary(silent = TRUE), error = function(e) NULL)
@@ -203,6 +209,7 @@ server <- function(input, output, session) {
   output$session_required_turnovers <- session_required_ui("turnovers")
   output$session_required_shots    <- session_required_ui("shots")
   output$session_required_goals    <- session_required_ui("goals")
+  output$session_required_penalties <- session_required_ui("penalties")
 
   # ----------------------------------------------------------
   # ON ICE TAB
@@ -567,6 +574,96 @@ server <- function(input, output, session) {
     tags$ol(lapply(rv$to_log, tags$li))
   })
 
+  
+  # ----------------------------------------------------------
+  # PENALTIES
+  # ----------------------------------------------------------
+  
+  # Auto-fill minutes when the penalty type changes (box stays editable,
+  # so a scorekeeper can override, e.g. count a game misconduct as 10).
+  observeEvent(input$pen_class, {
+    mins <- unname(PENALTY_CLASS_MINUTES[input$pen_class])
+    if (length(mins) == 1 && !is.na(mins)) {
+      updateNumericInput(session, "pen_minutes", value = mins)
+    }
+  })
+  
+  # Too many players on the ice is a bench penalty
+  observeEvent(input$pen_infraction, {
+    if (identical(input$pen_infraction, "too_many_players")) {
+      updateSelectInput(session, "pen_class", selected = "bench_minor")
+    }
+  })
+  
+  observeEvent(input$btn_submit_pen, {
+    req(rv$setup_done)
+    
+    is_vt      <- !is.null(input$pen_team) && input$pen_team == "VT"
+    is_bench   <- identical(input$pen_class, "bench_minor")
+    has_player <- is_vt && !is.null(input$pen_player) && nzchar(input$pen_player)
+    
+    if (is_vt && !is_bench && !has_player) {
+      notify_err("Please select the VT player who took the penalty."); return()
+    }
+    mins <- suppressWarnings(as.integer(input$pen_minutes))
+    if (is.na(mins) || mins < 0) {
+      notify_err("Enter the penalty minutes (0 or more)."); return()
+    }
+    
+    disable("btn_submit_pen")
+    on.exit(enable("btn_submit_pen"))
+    
+    pen_data <- list(
+      game_id        = rv$game_id,
+      period         = input$pen_period,
+      game_time      = trimws(input$pen_time),
+      team           = input$pen_team,
+      player_id      = if (has_player && !is_bench) as.integer(input$pen_player) else NULL,
+      infraction     = input$pen_infraction,
+      penalty_class  = input$pen_class,
+      minutes        = mins,
+      collector_name = rv$collector_name
+    )
+    pen_data <- Filter(Negate(is.null), pen_data)
+    
+    result <- sb_insert("penalties", pen_data)
+    
+    if (result$success) {
+      rv$last_pen_id <- result$id
+      who <- if (!is_vt) "Opponent"
+      else if (is.null(pen_data$player_id)) "VT bench"
+      else names(rv$players[rv$players == input$pen_player])
+      entry <- paste0(input$pen_period, "P  ", input$pen_time, "  ", who,
+                      "  \u2014 ", penalty_infraction_label(input$pen_infraction),
+                      " (", penalty_class_short(input$pen_class), ", ", mins, " min)")
+      rv$pen_log <- c(list(entry), rv$pen_log)[1:min(5, length(rv$pen_log) + 1)]
+      notify_ok(if (is_bench && is_vt) "Bench minor recorded (charged to the team)."
+                else "Penalty recorded!")
+      refresh_analytics_partial(c("penalties"))
+    } else {
+      notify_err(result$error)
+    }
+  })
+  
+  observeEvent(input$btn_undo_pen, {
+    req(!is.null(rv$last_pen_id))
+    res <- sb_delete("penalties", rv$last_pen_id)
+    if (res$success) {
+      rv$last_pen_id <- NULL
+      rv$pen_log     <- rv$pen_log[-1]
+      notify_ok("Last penalty entry deleted.")
+      refresh_analytics_partial(c("penalties"))
+    } else {
+      notify_err("Could not undo that penalty.")
+    }
+  })
+  
+  output$pen_log <- renderUI({
+    if (length(rv$pen_log) == 0) return(p("No entries yet."))
+    tags$ol(lapply(rv$pen_log, tags$li))
+  })
+  
+  
   # ----------------------------------------------------------
   # SUBMIT SHOT
   # ----------------------------------------------------------
@@ -734,7 +831,8 @@ server <- function(input, output, session) {
     turnovers = data.frame(),
     shots     = data.frame(),
     goals     = data.frame(),
-    on_ice    = data.frame()
+    on_ice    = data.frame(),
+    penalties = data.frame()
   )
 
   # Guarantee a proper data frame regardless of what sb_select returns
@@ -758,7 +856,8 @@ server <- function(input, output, session) {
       turnovers = filter_by_period(safe_df(summary_data$turnovers)),
       shots     = filter_by_period(safe_df(summary_data$shots)),
       goals     = filter_by_period(safe_df(summary_data$goals)),
-      on_ice    = filter_by_period(safe_df(summary_data$on_ice))
+      on_ice    = filter_by_period(safe_df(summary_data$on_ice)),
+      penalties = filter_by_period(safe_df(summary_data$penalties))
     )
   })
 
@@ -771,6 +870,7 @@ server <- function(input, output, session) {
     summary_data$shots     <- safe_df(sb_select("shots",     filters = c("game_id" = gid)))
     summary_data$goals     <- safe_df(sb_select("goals",     filters = c("game_id" = gid)))
     summary_data$on_ice    <- safe_df(sb_select("on_ice",    filters = c("game_id" = gid)))
+    summary_data$penalties <- safe_df(sb_select("penalties", filters = c("game_id" = gid)))
     if (!silent) notify_ok("Summary data refreshed!")
   }
 
@@ -924,6 +1024,7 @@ server <- function(input, output, session) {
     shots_df     <- sf$shots
     turnovers_df <- sf$turnovers
     faceoffs_df  <- sf$faceoffs
+    pim_team     <- sum_pim_by_team(sf$penalties)
     
     shots_vt  <- if (nrow(shots_df) > 0 && "team" %in% names(shots_df))
       sum(shots_df$team == "VT", na.rm = TRUE) else 0
@@ -1020,6 +1121,7 @@ server <- function(input, output, session) {
                  if (is.na(opp_save_pct)) 50 else opp_save_pct)
       else
         stat_row("Save %", "\u2014", "\u2014", 50, 50),
+      stat_row("Penalty Minutes", pim_team$vt, pim_team$opp),
       div(class = "alert alert-light border mt-3 mb-0", style = "font-size:0.76rem;",
           icon("circle-info"),
           " Takeaways/Giveaways are only tracked for VT players currently.")
@@ -1096,6 +1198,7 @@ server <- function(input, output, session) {
     to <- sf$turnovers
     sh <- sf$shots
     gl <- sf$goals
+    pn <- sf$penalties
     
     rows <- list()
     
@@ -1165,6 +1268,26 @@ server <- function(input, output, session) {
       )
     }
     
+    if (nrow(pn) > 0 && all(c("team", "infraction", "penalty_class", "minutes") %in% names(pn))) {
+      pen_pid <- if ("player_id" %in% names(pn)) pn$player_id else rep(NA_integer_, nrow(pn))
+      pen_who <- ifelse(
+        pn$team == "VT",
+        ifelse(is.na(pen_pid), "VT bench",
+               sapply(pen_pid, player_name_lookup, players_df)),
+        "Opponent")
+      rows[[length(rows) + 1]] <- data.frame(
+        created_at  = pn$created_at,
+        period      = pn$period,
+        game_time   = pn$game_time,
+        event       = "Penalty",
+        description = paste0(pen_who, " \u2014 ", penalty_infraction_label(pn$infraction),
+                             ", ", penalty_class_short(pn$penalty_class),
+                             " (", pn$minutes, " min, ", pn$team, ")"),
+        stringsAsFactors = FALSE
+      )
+    }
+    
+    
     if (length(rows) == 0) return(make_dt(data.frame()))
     
     pbp <- dplyr::bind_rows(rows) |>
@@ -1191,6 +1314,7 @@ server <- function(input, output, session) {
       faceoffs  = sf$faceoffs,
       turnovers = sf$turnovers,
       on_ice    = sf$on_ice,
+      penalties = sf$penalties,
       n_games   = 1
     )
     
@@ -1211,7 +1335,8 @@ server <- function(input, output, session) {
         TA       = takeaways,
         GA       = giveaways,
         BLK      = blocks,
-        `FO%`    = ifelse(is.na(fo_pct), "\u2014", paste0(fo_pct, "%"))
+        `FO%`    = ifelse(is.na(fo_pct), "\u2014", paste0(fo_pct, "%")),
+        PIM      = pim
       ) |>
       dplyr::arrange(dplyr::desc(Pts)) |>
       make_dt()
@@ -1279,6 +1404,7 @@ server <- function(input, output, session) {
     turnovers = data.frame(),
     on_ice    = data.frame(),
     games     = data.frame(),
+    penalties = data.frame(),
     n_games   = 1L
   ))
 
@@ -1294,6 +1420,7 @@ server <- function(input, output, session) {
       turnovers <- sb_select("turnovers")
       on_ice    <- sb_select("on_ice", select = "player_id,shot_id,game_id")
       games     <- sb_select("games", order = "game_date.asc")
+      penalties <- sb_select("penalties")
       analytics_data(list(
         players   = players,
         shots     = shots,
@@ -1302,9 +1429,15 @@ server <- function(input, output, session) {
         turnovers = turnovers,
         on_ice    = on_ice,
         games     = games,
+        penalties = penalties,
         n_games   = max(nrow(games), 1L)
       ))
-    }, error = function(e) NULL)
+    }, error = function(e) {
+      # This used to return NULL silently, which left the Players tab
+      # stuck on "Loading season data" with no clue why.
+      message("load_analytics FAILED: ", conditionMessage(e))
+      NULL
+    })
   }
   
   # Refreshes only the tables a given submission type could have changed,
@@ -1318,6 +1451,7 @@ server <- function(input, output, session) {
       if ("faceoffs" %in% tables)  current$faceoffs  <- sb_select("faceoffs")
       if ("turnovers" %in% tables) current$turnovers <- sb_select("turnovers")
       if ("on_ice" %in% tables)    current$on_ice    <- sb_select("on_ice", select = "player_id,shot_id,game_id")
+      if ("penalties" %in% tables) current$penalties <- sb_select("penalties")
       analytics_data(current)
     }, error = function(e) NULL)
   }
@@ -1400,6 +1534,7 @@ server <- function(input, output, session) {
     faceoffs_f  <- filter_by_game(d$faceoffs)
     turnovers_f <- filter_by_game(d$turnovers)
     on_ice_f    <- filter_by_game(d$on_ice)
+    penalties_f <- filter_by_game(d$penalties)
     
     single_game <- !is.null(input$player_game_filter) && input$player_game_filter != "season"
     
@@ -1435,6 +1570,7 @@ server <- function(input, output, session) {
         faceoffs  = faceoffs_f,
         turnovers = turnovers_f,
         on_ice    = on_ice_f,
+        penalties = penalties_f,
         n_games   = if (single_game) 1L else d$n_games
       )
     }
@@ -1670,7 +1806,9 @@ server <- function(input, output, session) {
               pct("xg_plus_minus")),
       if (!is.na(p$fo_pct))
         pct_bar("Faceoff Win %", paste0(p$fo_pct, "%  (", p$fo_total, " taken)"),
-                pct("fo_pct"))
+                pct("fo_pct")),
+      pct_bar("Penalty Min / Game \u2193", paste0(p$pim_per_game),
+              100L - pct("pim_per_game")),
     )
   })
 
@@ -1729,7 +1867,10 @@ server <- function(input, output, session) {
       metric_row("Blocked Shots", p$blocks),
       if (p$fo_total > 0)
         metric_row("Faceoff W\u2212L", paste0(p$fo_wins, "\u2212", p$fo_total - p$fo_wins),
-                   paste0(p$fo_pct, "% win rate"))
+                   paste0(p$fo_pct, "% win rate")),
+      metric_row("Penalty Minutes", p$pim,
+                 paste0(p$penalties_taken,
+                        if (p$penalties_taken == 1) " penalty" else " penalties")),
     )
   })
   

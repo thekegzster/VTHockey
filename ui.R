@@ -430,7 +430,7 @@ collector_tabs <- list(
             ),
             
             tags$h6(
-              "Skaters (leave unused boxes blank)",
+              "Skaters",
               class = "fw-bold text-center mb-2",
               style = paste0("color:", VT_MAROON, ";")
             ),
@@ -481,6 +481,71 @@ collector_tabs <- list(
         card(
           card_header("Line Change Log"),
           card_body(uiOutput("line_change_log"))
+        )
+    )
+  ),
+  
+  # ===========================================================
+  # TAB: PENALTIES
+  # ===========================================================
+  nav_panel(
+    title = tagList(icon("triangle-exclamation"), " Penalties"),
+    value = "tab_penalties",
+    
+    div(class = "container-fluid py-4", style = "max-width: 600px;",
+        
+        uiOutput("session_required_penalties"),
+        
+        card(
+          card_header(h4("Record a Penalty", class = "mb-0")),
+          card_body(
+            fluidRow(
+              column(6,
+                     selectInput("pen_period", "Period", choices = PERIOD_CHOICES, width = "100%")
+              ),
+              column(6,
+                     textInput("pen_time", "Time (MM:SS)", placeholder = "14:23", width = "100%")
+              )
+            ),
+            radioButtons("pen_team", "Team penalized",
+                         choices = c("VT" = "VT", "Opponent" = "opponent"),
+                         inline = TRUE),
+            conditionalPanel(
+              condition = "input.pen_team == 'VT'",
+              selectizeInput("pen_player", "VT Player (leave blank for a bench minor)",
+                             choices = NULL, width = "100%",
+                             options = list(placeholder = "Start typing name or #..."))
+            ),
+            selectInput("pen_infraction", "Infraction",
+                        choices = PENALTY_INFRACTIONS, width = "100%"),
+            fluidRow(
+              column(8,
+                     selectInput("pen_class", "Penalty type",
+                                 choices = PENALTY_CLASS_CHOICES, width = "100%")
+              ),
+              column(4,
+                     numericInput("pen_minutes", "Minutes", value = 2,
+                                  min = 0, max = 20, step = 1, width = "100%")
+              )
+            ),
+            div(
+              class = "d-flex gap-2 mt-3",
+              div(
+                class = "flex-grow-1",
+                actionButton("btn_submit_pen", "Submit Penalty",
+                             icon = icon("check"), class = "btn-primary w-100",
+                             style = "font-size: 1.1rem; padding: 12px;")
+              ),
+              actionButton("btn_undo_pen", "Undo Last",
+                           icon = icon("rotate-left"), class = "btn-outline-danger")
+            )
+          )
+        ),
+        
+        br(),
+        card(
+          card_header("Recent Penalty Entries"),
+          card_body(uiOutput("pen_log"))
         )
     )
   )
