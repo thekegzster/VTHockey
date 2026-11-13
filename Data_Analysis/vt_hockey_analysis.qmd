@@ -657,7 +657,7 @@ if (nrow(player_stats) == 0 || sum(player_stats$shots) == 0) {
     scale_fill_identity() +
     coord_flip() +
     labs(title = "Goals Above Expected (G − xG)",
-         subtitle = "Blue = outperforming expectation  |  Red = underperforming",
+         subtitle = "Orange = outperforming expectation  |  Maroon = underperforming",
          x = NULL, y = "G − xG") +
     theme_minimal(base_size = 12) +
     theme(panel.grid.major.y = element_blank())
