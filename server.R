@@ -1911,6 +1911,71 @@ server <- function(input, output, session) {
     )
   })
 
+  # ---- Best linemates (skaters only; follows the Game dropdown) ----
+  line_reports_rx <- reactive({
+    d <- analytics_data()
+    req(nrow(d$players) > 0)
+    events <- build_line_events(filter_by_game(d$shots),
+                                filter_by_game(d$on_ice),
+                                d$players)
+    compute_line_reports(events)
+  })
+  
+  output$player_linemates <- renderUI({
+    req(input$player_select)
+    if (input$player_type == "Goalie") return(NULL)
+    
+    lm       <- line_best_linemates(line_reports_rx(), as.integer(input$player_select))
+    partners <- lm$partners
+    is_d     <- identical(lm$pos, "D")
+    
+    body <- if (is.null(partners) || nrow(partners) == 0) {
+      p(class = "text-muted mb-0",
+        paste0("Not enough shared shot events yet. A pairing needs at least ",
+               LINE_MIN_EVENTS, " shot events with both players on the ice."))
+    } else {
+      tagList(
+        if (!is.null(lm$best_line)) {
+          bl <- lm$best_line
+          div(class = "mb-3 p-2 rounded", style = "background:#f5f0f2;",
+              tags$small(class = "text-muted d-block", "Best line he has played on"),
+              tags$b(bl$trio),
+              tags$span(class = "ms-2 text-muted",
+                        paste0(sprintf("%+.2f", bl$net_per_100),
+                               " net/100 over ", bl$events, " shot events")))
+        },
+        tags$table(
+          class = "table table-sm align-middle mb-0",
+          tags$thead(tags$tr(
+            tags$th(if (is_d) "Partner" else "Linemate"),
+            tags$th(class = "text-end", "Shot events"),
+            tags$th(class = "text-end", "xGF/100"),
+            tags$th(class = "text-end", "xGA/100"),
+            tags$th(class = "text-end", "Net/100")
+          )),
+          tags$tbody(lapply(seq_len(nrow(partners)), function(i) {
+            tags$tr(
+              tags$td(tags$b(partners$linemate[i])),
+              tags$td(class = "text-end", partners$events[i]),
+              tags$td(class = "text-end", sprintf("%.2f", partners$xgf_per_100[i])),
+              tags$td(class = "text-end", sprintf("%.2f", partners$xga_per_100[i])),
+              tags$td(class = "text-end", tags$b(sprintf("%+.2f", partners$net_per_100[i])))
+            )
+          }))
+        )
+      )
+    }
+    
+    card(
+      card_header(tagList(
+        if (is_d) "Best Defense Partners" else "Best Linemates",
+        tags$small(class = "text-muted ms-2",
+                   "(Ranked by net xG per 100 shot events)")
+      )),
+      card_body(body)
+    )
+  })
+  
   # ---- Personal shot map ----
   output$player_shot_map <- renderPlot({
     req(input$player_select)

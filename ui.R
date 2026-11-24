@@ -680,6 +680,12 @@ shared_tabs <- list(
         ),
         
         br(),
+        
+        fluidRow(
+          column(12, uiOutput("player_linemates"))
+        ),
+        
+        br(),
     )
   ),
   

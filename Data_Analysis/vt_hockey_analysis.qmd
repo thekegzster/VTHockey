@@ -31,6 +31,7 @@ library(ggrepel)
 if (file.exists("../.env")) readRenviron("../.env")
 source("../R/supabase.R")
 source("../R/analytics.R")
+source("../R/lines.R")
 source("../R/rink_plot.R")
 
 # Brand colors (defined in global.R for the app, which the report never loads)
@@ -715,6 +716,82 @@ if (nrow(player_stats) == 0 || sum(player_stats$shots) == 0) {
     theme(panel.grid.minor = element_blank())
 }
 ```
+
+# Line Optimization
+
+Units are forward trios (3 forwards) and defense pairs (2 defensemen) that were on the ice together for 5-skater shots. Every shot attempt, for or against, is scored with the xG model, and rates are per 100 shot events because time on ice is not tracked. In each lineup the best-scoring unit takes the heaviest deployment slot (forwards 35/30/20/15%, defense 45/35/20%), and no player is used twice.
+
+```{r line-setup}
+#| echo: false
+line_events  <- build_line_events(shots, on_ice, players)
+line_reports <- compute_line_reports(line_events)
+lineups      <- line_build_lineups(line_reports)
+
+line_gt <- function(df, title) {
+  df |>
+    dplyr::rename(Slot = deployment_slot, Unit = unit,
+                  `Shot events` = events, Games = games,
+                  `xGF/100` = xgf_per_100, `xGA/100` = xga_per_100,
+                  `Net/100` = net_per_100) |>
+    gt() |>
+    tab_header(title = title) |>
+    fmt_number(columns = c(`xGF/100`, `xGA/100`, `Net/100`), decimals = 2) |>
+    tab_style(style = cell_text(weight = "bold"),
+              locations = cells_column_labels())
+}
+
+show_units <- function(df, title) {
+  if (is.null(df) || nrow(df) == 0) {
+    cat("Not enough on-ice shot data to build this yet.")
+  } else {
+    line_gt(df, title)
+  }
+}
+```
+
+## Best Overall Lineup
+
+Maximizes net xG per 100 shot events.
+
+```{r line-overall-fwd}
+#| echo: false
+show_units(lineups$overall$forwards, "Best Overall: Forward Lines")
+```
+
+```{r line-overall-def}
+#| echo: false
+show_units(lineups$overall$defense, "Best Overall: Defense Pairs")
+```
+
+## Offense-Maximized Lineup
+
+Maximizes xGF per 100 shot events.
+
+```{r line-offense-fwd}
+#| echo: false
+show_units(lineups$offense$forwards, "Offense-Maximized: Forward Lines")
+```
+
+```{r line-offense-def}
+#| echo: false
+show_units(lineups$offense$defense, "Offense-Maximized: Defense Pairs")
+```
+
+## Defense-Maximized Lineup
+
+Minimizes xGA per 100 shot events.
+
+```{r line-defense-fwd}
+#| echo: false
+show_units(lineups$defense$forwards, "Defense-Maximized: Forward Lines")
+```
+
+```{r line-defense-def}
+#| echo: false
+show_units(lineups$defense$defense, "Defense-Maximized: Defense Pairs")
+```
+
+---
 
 ---
 
